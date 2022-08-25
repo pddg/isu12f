@@ -1,0 +1,31 @@
+### {{ inventory_hostname }}
+
+{% if collect_pprof_profile | default(false) %}
+手元のMacで以下を実行する
+```
+go tool pprof -http :8081 bench_results/{{ result_prefix }}/{{ inventory_hostname }}.pb.gz
+```
+{% endif %}
+
+{% if collect_slowquery_log | default(false) %}
+<details>
+<summary>sudo pt-query-digest /tmp/slowquery.log</summary>
+
+```
+{{ pt_query_digest.stdout }}
+```
+
+</details>
+{% endif %}
+
+{% if collect_access_log | default(false) %}
+<details>
+<summary>cat /var/log/nginx/access.log | alp {{ alp_option }}</summary>
+
+```
+{{ alp.stdout }}
+```
+
+</details>
+{% endif %}
+  

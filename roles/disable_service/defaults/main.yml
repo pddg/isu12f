@@ -1,0 +1,5 @@
+---
+# サービス名を列挙する
+# disable_services:
+#   - nginx
+disable_services: []

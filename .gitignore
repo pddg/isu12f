@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+
+.ssh/*
+!.ssh/.git-keep
+.fact_caches/*
+!.fact_caches/.git-keep
+bench_results/*
+!bench_results/.git-keep
+
+.venv/
+.vagrant/
+.DS_Store
+
+/TARGET

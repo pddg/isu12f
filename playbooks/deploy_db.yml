@@ -1,0 +1,9 @@
+---
+- hosts: db
+  roles:
+    - name: mysql
+      vars:
+        mysql_config_files:
+          - /etc/mysql/mysql.conf.d/mysqld.cnf
+          - /etc/mysql/mysql.cnf
+          - /lib/systemd/system/mysql.service

@@ -1,0 +1,19 @@
+---
+- block:
+    - name: Specified services are reloaded
+      systemd:
+        name: "{{ item.name }}"
+        state: reloaded
+      become: yes
+      when: item.reload | default(False) | bool
+      loop: "{{ restart_services }}"
+
+    - name: Specified services are restarted
+      systemd:
+        name: "{{ item.name }}"
+        daemon_reload: "{{ item.daemon_reload | default(False) | bool }}"
+        state: restarted
+      when: item.restart | default(True) | bool
+      become: yes
+      loop: "{{ restart_services }}"
+  when: restart_services | length > 0

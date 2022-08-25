@@ -1,0 +1,13 @@
+---
+# ufwのルールを記述する．
+# 詳細はドキュメントを見ること．
+# https://docs.ansible.com/ansible/latest/modules/ufw_module.html
+# firewall_rules:
+#   - rule: allow
+#     src: 192.168.68.0/24
+#     port: 80
+#     proto: tcp
+#   - rule: deny
+#     port 53
+#   - rule: allow
+#     name: OpenSSH

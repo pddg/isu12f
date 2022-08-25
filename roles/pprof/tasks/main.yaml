@@ -1,0 +1,36 @@
+---
+- name: Result dir exists
+  become: yes
+  become_user: isucon
+  file:
+    path: "/home/isucon/bench_results/{{ result_prefix }}"
+    state: directory
+
+- pause:
+    prompt: "ベンチマークが開始したらEnterを押してください"
+
+- name: Start profiling
+  become: yes
+  become_user: isucon
+  ignore_errors: yes
+  command:
+    argv:
+      - "/home/isucon/local/go/bin/go"
+      - "tool"
+      - "pprof"
+      - "-seconds"
+      - "90"
+      - "-proto"
+      - "-output"
+      - "/home/isucon/bench_results/{{ result_prefix }}/{{ inventory_hostname }}.pb.gz"
+      - "http://localhost:{{ webapp_listen_port }}/debug/pprof/profile"
+
+- name: Pull profiling result
+  ignore_errors: yes
+  fetch:
+    src: "/home/isucon/bench_results/{{ result_prefix }}/{{ inventory_hostname }}.pb.gz"
+    dest: "../bench_results/{{ result_prefix }}/"
+    flat: yes
+
+- pause:
+    prompt: "ベンチマークが完了したらEnterを押してください"

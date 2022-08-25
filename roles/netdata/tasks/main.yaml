@@ -1,0 +1,8 @@
+---
+- name: Netdata is installed (Debian)
+  apt:
+    name:
+      - netdata
+    cache_valid_time: 3600
+  become: yes
+  when: ansible_os_family == "Debian"

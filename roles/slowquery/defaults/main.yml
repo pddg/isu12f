@@ -1,0 +1,20 @@
+---
+slowquery_database_type: mysql
+slowquery_unix_socket: /run/mysqld/mysqld.sock
+
+# Supported databases of this role
+slowquery_supported_databases:
+  - mysql
+  - postgres
+  - mariadb
+
+# Slow query is disabled by default
+slowquery_enable: no
+
+# Threshold to record as slow query
+slowquery_threshold: 0.5
+
+# Path to slow query log file
+slowquery_log_file: /tmp/slow_query.log
+
+slowquery_postgres_service: postgresql

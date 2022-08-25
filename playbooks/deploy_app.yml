@@ -1,0 +1,13 @@
+---
+- hosts: web
+  roles:
+    - name: deploy_configs
+      vars:
+        deploy_config_files:
+          - "/etc/systemd/system/{{ app_unit_name }}.service"
+    - name: deploy_webapp
+    - name: restart_service
+      vars:
+        restart_services:
+          - name: "{{ app_unit_name }}"
+            daemon_reload: yes

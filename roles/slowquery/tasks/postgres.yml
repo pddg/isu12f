@@ -1,0 +1,76 @@
+---
+- name: Install psycopg2
+  pip:
+    name:
+      - setuptools
+      - psycopg2-binary
+
+- debug:
+    msg: "Target DB: {{ slowquery_db }}"
+
+- block:
+
+    - name: Enable slow query log
+      postgresql_set:
+        name: log_min_duration_statement
+        value: "{{ slowquery_threshold }}"
+        db: "{{ slowquery_db }}"
+        login_user: "{{ slowquery_db_user | default(omit) }}"
+        login_password: "{{ slowquery_db_password | default(omit) }}"
+        port: "{{ slowquery_db_port | default(omit) }}"
+      notify: Reload PostgreSQL config
+
+    - name: Enable pg_stat_statements
+      postgresql_ext:
+        name: pg_stat_statements
+        db: "{{ slowquery_db }}"
+        cascade: yes
+        login_user: "{{ slowquery_db_user | default(omit) }}"
+        login_password: "{{ slowquery_db_password | default(omit) }}"
+        port: "{{ slowquery_db_port | default(omit) }}"
+      notify: Reload PostgreSQL config
+
+    - name: pg_stat_statements is added to shared_preload_libraries
+      postgresql_set:
+        name: shared_preload_libraries
+        value: "pg_stat_statements"
+        db: "{{ slowquery_db }}"
+        login_user: "{{ slowquery_db_user | default(omit) }}"
+        login_password: "{{ slowquery_db_password | default(omit) }}"
+        port: "{{ slowquery_db_port | default(omit) }}"
+      notify: Restart PostgreSQL
+
+  when: slowquery_enable
+
+- block:
+
+    - name: Disable logging
+      postgresql_set:
+        name: log_statement
+        value: "none"
+        login_user: "{{ slowquery_db_user | default(omit) }}"
+        login_password: "{{ slowquery_db_password | default(omit) }}"
+        port: "{{ slowquery_db_port | default(omit) }}"
+      notify: Reload PostgreSQL config
+
+    - name: Disable pg_stat_statements
+      postgresql_ext:
+        name: pg_stat_statements
+        db: "{{ slowquery_db }}"
+        state: absent
+        cascade: yes
+        login_user: "{{ slowquery_db_user | default(omit) }}"
+        login_password: "{{ slowquery_db_password | default(omit) }}"
+        port: "{{ slowquery_db_port | default(omit) }}"
+      notify: Reload PostgreSQL config
+
+    - name: pg_stat_statements is removed from shared_preload_libraries
+      postgresql_set:
+        name: shared_preload_libraries
+        value: ""
+        db: "{{ slowquery_db }}"
+        login_user: "{{ slowquery_db_user | default(omit) }}"
+        login_password: "{{ slowquery_db_password | default(omit) }}"
+        port: "{{ slowquery_db_port | default(omit) }}"
+      notify: Rstart PostgreSQL
+  when: not slowquery_enable

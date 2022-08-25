@@ -1,0 +1,19 @@
+---
+- name: Copy configuration files
+  copy:
+    src: "../backup/{{ inventory_hostname }}{{ item }}"
+    dest: "{{ item }}"
+    owner: root
+    group: root
+    mode: 0644
+  become: yes
+  loop: "{{ mysql_config_files }}"
+  register: mysql_config
+
+- name: Restart mysql
+  when: mysql_config.changed
+  become: yes
+  systemd:
+    name: mysql
+    daemon_reload: yes
+    state: restarted

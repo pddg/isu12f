@@ -1,0 +1,15 @@
+---
+- name: Reload PostgreSQL config
+  postgresql_query:
+    query: SELECT pg_reload_conf()
+    db: "{{ slowquery_db }}"
+    login_user: "{{ slowquery_db_user | default(omit) }}"
+    login_password: "{{ slowquery_db_password | default(omit) }}"
+    port: "{{ slowquery_db_port | default(omit) }}"
+
+- name: Restart PostgreSQL
+  service:
+    name: "{{ slowquery_postgres_service }}"
+    state: restarted
+  become: yes
+  when: ansible_connection != docker

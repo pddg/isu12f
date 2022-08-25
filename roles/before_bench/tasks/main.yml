@@ -1,0 +1,21 @@
+---
+- name: logrotate configs are up-to-date
+  become: yes
+  loop:
+    - slowquery
+    - nginx
+  template:
+    src: "{{ item }}"
+    dest: "/etc/logrotate.d/{{ item }}"
+    owner: root
+    group: root
+
+- name: nginx log is rotated
+  become: yes
+  command: "sudo logrotate -f /etc/logrotate.d/nginx"
+  when: rotate_nginx_log | default(false)
+
+- name: slow query log is rotated
+  become: yes
+  command: "sudo logrotate -f /etc/logrotate.d/slowquery"
+  when: rotate_mysql_log | default(false)

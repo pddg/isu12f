@@ -1,0 +1,9 @@
+---
+# サービス名を列挙する
+# restart_services:
+#   - name: nginx
+#     restart: yes
+#     reload: yes
+#   - name: mariadb
+#     restart: yes
+restart_services: []

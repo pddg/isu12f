@@ -1,0 +1,3 @@
+---
+rotate_nginx_log: yes
+collect_access_log: yes

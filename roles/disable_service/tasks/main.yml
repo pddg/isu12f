@@ -1,0 +1,9 @@
+---
+- name: Specified services are stopped and disabled
+  systemd:
+    name: "{{ item }}"
+    enabled: no
+    state: stopped
+  become: yes
+  ignore_errors: yes
+  loop: "{{ disable_services }}"

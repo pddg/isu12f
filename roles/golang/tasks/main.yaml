@@ -1,0 +1,63 @@
+---
+- name: Check Installed Go
+  become: yes
+  become_user: isucon
+  args:
+    chdir: /home/isucon
+  command: /home/isucon/local/go/bin/go version
+  register: go_version_output
+  changed_when: go_version_output is failed
+  ignore_errors: true
+
+- name: Installed go version
+  when: go_version_output is not failed
+  debug:
+    msg: "{{ go_version_output.stdout }}"
+
+- when: go_version_output is failed
+  block:
+    - name: Remove existing go dir
+      become: yes
+      become_user: isucon
+      file:
+        path: /home/isucon/local/go
+        state: absent
+
+    - name: Download Go archive
+      become: yes
+      become_user: isucon
+      register: download_go
+      retries: 5
+      delay: 5
+      until: download_go is success
+      get_url:
+        url: "https://go.dev/dl/go{{ go_version }}.linux-amd64.tar.gz"
+        dest: "/tmp/go{{ go_version }}.linux-amd64.tar.gz"
+        checksum: "sha256:{{ go_archive_checksum }}"
+        mode: 0755
+
+    - name: Install Go
+      become: yes
+      become_user: isucon
+      unarchive:
+        src: "/tmp/go{{ go_version }}.linux-amd64.tar.gz"
+        dest: "/home/isucon/local/"
+        remote_src: yes
+        owner: isucon
+
+    - name: Check Installed Go
+      become: yes
+      become_user: isucon
+      command: /home/isucon/local/go/bin/go version
+      register: go_version_output
+
+- name: Add PATH for Go
+  become: yes
+  become_user: isucon
+  blockinfile:
+    marker: "# {mark} ANSIBLE MANAGED BLOCK go"
+    dest: /home/isucon/.bash_profile
+    create: yes
+    content: |
+      export PATH=/home/isucon/local/go/bin:/home/isucon/go/bin:$PATH
+      export GOROOT=/home/isucon/local/go

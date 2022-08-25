@@ -1,0 +1,64 @@
+---
+- name: Run pt-query-digest
+  when: collect_slowquery_log | default(false)
+  become: yes
+  shell: "pt-query-digest /tmp/slow_query.log"
+  register: pt_query_digest
+
+- name: Run alp
+  when: collect_access_log | default(false)
+  shell: "cat /var/log/nginx/access.log | alp ltsv {{ alp_option }}"
+  register: alp
+
+- name: Result dir exists
+  file:
+    path: "/home/isucon/bench_results/{{ result_prefix }}"
+    state: directory
+    mode: 0755
+    owner: isucon
+    group: isucon
+
+- name: Make report
+  template:
+    src: "report.txt.jinja2"
+    dest: "/home/isucon/bench_results/{{ result_prefix }}/{{ inventory_hostname }}.txt"
+    mode: 0744
+    owner: isucon
+    group: isucon
+
+- name: Local result dir exists
+  run_once: yes
+  delegate_to: localhost
+  file:
+    path: "../bench_results/{{ result_prefix }}"
+    state: directory
+    mode: 0755
+
+- name: Pull report text
+  ignore_errors: yes
+  fetch:
+    src: "/home/isucon/bench_results/{{ result_prefix }}/{{ inventory_hostname }}.txt"
+    dest: "../bench_results/{{ result_prefix }}/{{ inventory_hostname }}.txt"
+    flat: yes
+
+- name: Post report
+  become: no
+  run_once: yes
+  delegate_to: localhost
+  shell: |
+    RESULT_DIR=../bench_results/{{ result_prefix }}
+    cat << EOF > ${RESULT_DIR}/report.md
+    Benchmark result at {{ result_prefix }}
+    Commit Hash: $(git rev-parse HEAD)
+    <details>
+    <summary>git status -s -b</summary>
+
+    \`\`\`
+    $(git status -s -b)
+    \`\`\`
+
+    </details>
+
+    EOF
+    cat ${RESULT_DIR}/*.txt >> ${RESULT_DIR}/report.md
+    gh issue comment {{ github_bench_issue_number }} -F ${RESULT_DIR}/report.md

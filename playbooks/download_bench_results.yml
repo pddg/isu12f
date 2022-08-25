@@ -1,0 +1,33 @@
+---
+- hosts: all
+  tasks:
+    - name: Find all benchmark result dir
+      find:
+        paths: '/home/isucon/bench_results/'
+        file_type: directory
+        recurse: no
+      register: bench_result_dirs
+
+    - name: Create all parent dir
+      loop: "{{ bench_result_dirs.files | map(attribute='path') | list }}"
+      delegate_to: localhost
+      file:
+        path: "../bench_results/{{ item | basename }}"
+        state: directory
+
+    - name: Find all results
+      find:
+        paths: '/home/isucon/bench_results/'
+        file_type: file
+        patterns: 
+          - '*.pb.gz'
+          - '*.txt'
+        recurse: yes
+      register: bench_profiles
+      
+    - name: Fetch all results
+      loop: "{{ bench_profiles.files | map(attribute='path') | list }}"
+      fetch:
+        src: "{{ item }}"
+        dest: "../bench_results/{{ item | dirname | basename }}/"
+        flat: yes

@@ -1,0 +1,31 @@
+---
+- hosts: all
+  become: true
+  pre_tasks:
+    - name: Install pip (Debian)
+      become: yes
+      apt:
+        name:
+          - python3-pip
+          - graphviz
+        cache_valid_time: 3600
+    - name: Install percona-toolkit
+      become: yes
+      apt:
+        name:
+          - percona-toolkit
+        cache_valid_time: 3600
+  roles:
+    - name: pddg.alp
+      vars:
+        alp_version: 1.0.10
+    - name: netdata
+    # Place logrotation config for all hosts
+    - name: before_bench
+      vars:
+        rotate_mysql_log: no
+        rotate_nginx_log: no
+    - name: golang
+      vars:
+        go_version: 1.18.5
+        go_archive_checksum: 9e5de37f9c49942c601b191ac5fba404b868bfc21d446d6960acc12283d6e5f2

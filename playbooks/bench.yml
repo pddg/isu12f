@@ -1,0 +1,12 @@
+---
+- hosts: all
+  pre_tasks:
+    - set_fact:
+        result_prefix: "{{ lookup('pipe','date +%Y%m%d_%H%M') }}"
+      delegate_to: localhost
+      run_once: true
+  roles:
+    - name: before_bench
+    - name: pprof
+      when: collect_pprof_profile | default(false)
+    - name: after_bench

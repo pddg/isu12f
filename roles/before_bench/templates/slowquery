@@ -1,0 +1,13 @@
+/tmp/slow_query.log {
+    daily
+    missingok
+    rotate 10
+    notifempty
+    nocompress
+    sharedscripts
+    create mysql mysql
+    postrotate
+        mysql -u{{ mysql_root_user }} -p{{ mysql_root_password }} -e 'flush slow logs'
+    endscript
+    su mysql mysql
+}

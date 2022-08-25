@@ -1,0 +1,19 @@
+---
+- name: Copy configuration files
+  copy:
+    src: "../backup/{{ inventory_hostname }}{{ item }}"
+    dest: "{{ item }}"
+    owner: root
+    group: root
+    mode: 0644
+  become: yes
+  loop: "{{ nginx_config_files }}"
+  register: nginx_config
+
+- name: Restart nginx
+  when: nginx_config.changed
+  become: yes
+  systemd:
+    name: nginx
+    daemon_reload: yes
+    state: restarted

@@ -1,0 +1,11 @@
+---
+clear_nginx_log: no
+nginx_user: nginx
+nginx_log_files:
+  - /var/log/nginx/access.log
+  - /var/log/nginx/error.log
+
+clear_slow_query_log: no
+mysql_user: mysql
+slow_query_files:
+  - /tmp/slow_query.log

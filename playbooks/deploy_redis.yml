@@ -1,0 +1,16 @@
+---
+- hosts: redis
+  become: yes
+  tasks:
+    - name: redis is installed
+      apt:
+        name:
+          - redis
+        cache_valid_time: 3600
+    - name: redis is started
+      systemd:
+        name: redis
+        daemon_reload: yes
+        enabled: yes
+        state: started
+

@@ -1,0 +1,9 @@
+---
+- hosts: nginx
+  roles:
+    - name: nginx
+      vars:
+        nginx_config_files:
+          - "/etc/nginx/sites-available/{{ app_name }}.conf"
+          - "/etc/nginx/nginx.conf"
+          - "/lib/systemd/system/nginx.service"

@@ -1,0 +1,11 @@
+---
+backup_dirs:
+  - /etc/mysql
+  - /etc/nginx
+backup_files:
+  - /lib/systemd/system/nginx.service
+  - /lib/systemd/system/mysql.service
+  - /etc/systemd/system/{{ app_unit_name }}.service
+
+disable_services: []
+

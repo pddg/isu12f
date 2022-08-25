@@ -1,0 +1,3 @@
+---
+rotate_mysql_log: yes
+collect_slowquery_log: yes

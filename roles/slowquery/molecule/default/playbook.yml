@@ -1,0 +1,20 @@
+---
+- name: Converge
+  hosts: all
+  connection: docker
+  pre_tasks:
+    - name: Install python-setuptools
+      apt:
+        name:
+          - python-setuptools
+          - python-pip
+      ignore_errors: yes
+      register: setuptools
+
+  roles:
+    - role: ../../../.
+  vars:
+    slowquery_enable: yes
+    slowquery_db_user: root
+    slowquery_db_password: root
+    slowquery_db: slowquery

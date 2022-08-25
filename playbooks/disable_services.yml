@@ -1,0 +1,21 @@
+---
+- hosts: all:!nginx
+  roles:
+    - name: disable_service
+      vars:
+        disable_services:
+          - nginx
+
+- hosts: all:!db
+  roles:
+    - name: disable_service
+      vars:
+        disable_services:
+          - mysql
+
+- hosts: all:!web
+  roles:
+    - name: disable_service
+      vars:
+        disable_services:
+          - "{{ app_unit_name }}"

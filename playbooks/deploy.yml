@@ -1,0 +1,7 @@
+---
+- import_playbook: deploy_nginx.yml
+- import_playbook: deploy_db.yml
+# - import_playbook: deploy_redis.yml
+- import_playbook: deploy_app.yml
+- import_playbook: disable_services.yml
+

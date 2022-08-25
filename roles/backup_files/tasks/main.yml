@@ -1,0 +1,46 @@
+---
+- name: Backup dirs are created
+  file:
+    path: "../backup/{{ inventory_hostname + item | dirname }}"
+    state: directory
+    recurse: yes
+  loop: "{{ backup_files }}"
+  delegate_to: localhost
+  become: no
+
+- name: Specified files are backuped
+  fetch:
+    src: "{{ item }}"
+    dest: "../backup/"
+  become: yes
+  ignore_errors: yes
+  loop: "{{ backup_files }}"
+
+- name: Backup dirs are created
+  file:
+    path: "../backup/{{ inventory_hostname + item | dirname }}"
+    state: directory
+    recurse: yes
+  loop: "{{ backup_dirs }}"
+  delegate_to: localhost
+  become: no
+
+- name: Specified dirs are backuped
+  synchronize:
+    src: "{{ item }}"
+    dest: "../backup/{{ inventory_hostname + item | dirname }}"
+    compress: no
+    archive: no
+    delete: yes
+    recursive: yes
+    mode: pull
+    rsync_opts:
+      - --exclude=__pycache__/
+      - --exclude=.venv/
+      - --exclude=venv/
+      - --exclude=node_modules/
+      - --exclude=vendor/
+      - --exclude=.git/
+  become: yes
+  loop: "{{ backup_dirs }}"
+  ignore_errors: yes

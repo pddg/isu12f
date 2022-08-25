@@ -1,0 +1,94 @@
+---
+dependency:
+  name: galaxy
+driver:
+  name: docker
+lint:
+  name: yamllint
+platforms:
+  - name: slowquery-mysql-8
+    image: mysql:8
+    override_command: False
+    env:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: slowquery
+  - name: slowquery-mysql-5.7
+    image: mysql:5.7
+    override_command: False
+    env:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: slowquery
+  - name: slowquery-mariadb-10.4
+    image: mariadb:10.4-bionic
+    override_command: False
+    env:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: slowquery
+  - name: slowquery-mariadb-10.3
+    image: mariadb:10.3-bionic
+    override_command: False
+    env:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: slowquery
+  - name: slowquery-postgres-12
+    image: postgres:12
+    override_command: False
+    env:
+      POSTGRES_PASSWORD: root
+      POSTGRES_USER: root
+      POSTGRES_DB: slowquery
+  - name: slowquery-postgres-11.4
+    image: postgres:11.4
+    override_command: False
+    env:
+      POSTGRES_PASSWORD: root
+      POSTGRES_USER: root
+      POSTGRES_DB: slowquery
+  - name: slowquery-postgres-10.9
+    image: postgres:10.9
+    override_command: False
+    env:
+      POSTGRES_PASSWORD: root
+      POSTGRES_USER: root
+      POSTGRES_DB: slowquery
+  - name: slowquery-postgres-9.6
+    image: postgres:9.6
+    override_command: False
+    env:
+      POSTGRES_PASSWORD: root
+      POSTGRES_USER: root
+      POSTGRES_DB: slowquery
+provisioner:
+  name: ansible
+  lint:
+    name: ansible-lint
+    options:
+      x:
+        - 701
+        - 305
+  config_options:
+    defaults:
+      fact_caching: pickle
+  inventory:
+    group_vars:
+      all:
+        slowquery_db_user: root
+        slowquery_db_password: root
+        slowquery_db: slowquery
+    host_vars:
+      slowquery-postgres-9.6:
+        slowquery_database_type: postgres
+        slowquery_threshold: 500ms
+      slowquery-postgres-10.9:
+        slowquery_database_type: postgres
+        slowquery_threshold: 500ms
+      slowquery-postgres-11.4:
+        slowquery_database_type: postgres
+        slowquery_threshold: 500ms
+      slowquery-postgres-12:
+        slowquery_database_type: postgres
+        slowquery_threshold: 500ms
+verifier:
+  name: testinfra
+  lint:
+    name: flake8

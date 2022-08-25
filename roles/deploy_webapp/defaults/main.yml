@@ -1,0 +1,7 @@
+---
+deploy_build_command: "echo 'No build command'"
+
+deploy_app_name: ""
+
+deploy_app_repository: https://github.com/pddg
+

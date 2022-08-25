@@ -1,0 +1,7 @@
+webapp_listen_port: 1323
+
+collect_pprof_profile: yes
+
+alp_option: "-r"
+github_bench_issue_number: 1
+

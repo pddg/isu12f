@@ -1,0 +1,15 @@
+---
+# バックアップしたいファイルパスを指定する
+#
+# backup_files:
+#   - /path/to/hoge
+#
+backup_files: []
+
+# バックアップしたいディレクトリを指定する．
+#
+# backup_dirs:
+#   - /path/to/dir
+#
+backup_dirs: []
+

@@ -1,0 +1,9 @@
+---
+- name: Validate database type
+  assert:
+    that:
+      - slowquery_database_type in slowquery_supported_databases
+    quiet: yes
+    fail_msg: "Supported databases are '{{ slowquery_supported_databases }}'"
+
+- include_tasks: "{{ slowquery_database_type }}.yml"

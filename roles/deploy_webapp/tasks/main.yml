@@ -1,0 +1,31 @@
+---
+- name: Source files are deployed
+  synchronize:
+    src: "../webapp"
+    # /home/isucon/webapp になっている場合
+    dest: "{{ deploy_app_dir }}/../"
+    # /home/isucon/APP/webapp になっている場合
+    # dest: "{{ deploy_app_dir }}"
+    compress: yes
+    archive: no
+    delete: no
+    recursive: yes
+    mode: push
+    rsync_opts:
+      - --exclude=__pycache__/
+      - --exclude=.venv/
+      - --exclude=venv/
+      - --exclude=node_modules/
+      - --exclude=vendor/
+      - --exclude=.git/
+      - --exclude=public/
+  become: no
+
+- name: App binary is built
+  command: "/home/isucon/local/go/bin/go build -o {{ app_name }}"
+  args:
+    chdir: "{{ deploy_app_dir }}/go"
+  environment:
+    GOOS: "linux"
+    GOARCH: "amd64"
+    CGO_ENBALED: "0"

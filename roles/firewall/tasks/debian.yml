@@ -1,0 +1,29 @@
+---
+- name: Deny all by default
+  ufw:
+    state: enabled
+    policy: deny
+    direction: incoming
+  become: yes
+
+- name: "logging is {{firewall_logging | bool | ternary('enabled', 'disabled') }}"
+  ufw:
+    logging: "{{ firewall_logging | bool }}"
+
+- name: Custom rules are configured
+  ufw:
+    rule: "{{ item.allow | default('allow') }}"
+    name: "{{ item.name | default(omit)}}"
+    delete: "{{ item.delete | default(omit) }}"
+    src: "{{ item.src | default(omit) }}"
+    dest: "{{ item.dest | default(omit) }}"
+    port: "{{ item.port | default(omit) }}"
+    proto: "{{ item.proto | default(omit) }}"
+    interface: "{{ item.interface | default(omit) }}"
+    direction: "{{ item.direction | default('in') }}"
+    from_port: "{{ item.from_port | default(omit) }}"
+    to_port: "{{ item.to_port | default(omit) }}"
+    to_ip: "{{ item.to_ip | default(omit) }}"
+  loop: "{{ firewall_rules }}"
+  become: yes
+  notify: Reload ufw rules

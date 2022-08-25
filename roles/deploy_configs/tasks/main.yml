@@ -1,0 +1,10 @@
+---
+- name: Copy configuration files
+  copy:
+    src: "../backup/{{ inventory_hostname }}{{ item }}"
+    dest: "{{ item }}"
+    owner: root
+    group: root
+    mode: 0644
+  become: yes
+  loop: "{{ deploy_config_files }}"
