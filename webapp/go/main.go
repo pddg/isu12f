@@ -1300,6 +1300,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 	defer tx.Rollback() //nolint:errcheck
 
 	// 配布処理
+	userIdxCoinMap := make(map[int64]int)
 	for i := range obtainPresent {
 		if obtainPresent[i].DeletedAt != nil {
 			return errorResponse(c, http.StatusInternalServerError, fmt.Errorf("received present"))
@@ -1314,7 +1315,26 @@ func (h *Handler) receivePresent(c echo.Context) error {
 			return errorResponse(c, http.StatusInternalServerError, err)
 		}
 
+		// when item is coin
+		if v.ItemType == 1 {
+			userIdxCoinMap[v.UserID] += obtainPresent[i].Amount
+			continue
+		}
 		_, _, _, err = h.obtainItem(tx, v.UserID, v.ItemID, v.ItemType, int64(v.Amount), requestAt)
+		if err != nil {
+			if err == ErrUserNotFound || err == ErrItemNotFound {
+				return errorResponse(c, http.StatusNotFound, err)
+			}
+			if err == ErrInvalidItemType {
+				return errorResponse(c, http.StatusBadRequest, err)
+			}
+			return errorResponse(c, http.StatusInternalServerError, err)
+		}
+	}
+
+	// bulk update coin
+	for key, val := range userIdxCoinMap {
+		_, _, _, err = h.obtainItem(tx, key, 0, 1, int64(val), 0)
 		if err != nil {
 			if err == ErrUserNotFound || err == ErrItemNotFound {
 				return errorResponse(c, http.StatusNotFound, err)
