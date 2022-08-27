@@ -2,6 +2,7 @@
 backup_dirs:
   - /etc/mysql
   - /etc/nginx
+  - /etc/redis
 backup_files:
   - /lib/systemd/system/nginx.service
   - /lib/systemd/system/mysql.service
