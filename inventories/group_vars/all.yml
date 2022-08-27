@@ -1,6 +1,6 @@
 ---
 # アプリケーションの名前
-app_name: isu
+app_name: isuconquest
 
 # Systemd unitの名前
 app_unit_name: "{{ app_name }}.go"
@@ -11,4 +11,4 @@ deploy_app_dir: "/home/isucon/webapp"
 # logrotateのファイルを置くのに全ホストから参照したいのでここに置く。
 # mysql -u{{mysql_root_user}} -p{{ mysql_root_password}}で接続出来るか確認すること。
 mysql_root_user: root
-mysql_root_password: root
+mysql_root_password: isucon
