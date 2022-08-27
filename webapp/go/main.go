@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -685,40 +686,48 @@ func (h *Handler) updateItem(tx *sqlx.Tx, userID, itemID int64, itemType int, ob
 }
 
 func (h *Handler) updateItems(tx *sqlx.Tx, presents []*UserPresent, requestAt int64) error {
-	itemIDItemMaster := make(map[int64]*ItemMaster)
+	var itemMasters []*ItemMaster
+	args := make([]interface{}, 0, len(presents)*2)
 	for _, p := range presents {
-		if itemIDItemMaster[p.ItemID] != nil {
-			continue
-		}
+		args = append(args, p.ItemID, p.ItemType)
+	}
+	conds := make([]string, 0, len(presents))
+	for i := 0; i < len(presents); i++ {
+		conds = append(conds, "(id = ? AND item_type = ?)")
+	}
+	query := "SELECT * FROM item_masters WHERE " + strings.Join(conds, " OR ")
+	if err := tx.Select(&itemMasters, query, args...); err != nil {
+		return err
+	}
 
-		query := "SELECT * FROM item_masters WHERE id=? AND item_type=?"
-		i := new(ItemMaster)
-		if err := tx.Get(i, query, p.ItemID, p.ItemType); err != nil {
-			if err == sql.ErrNoRows {
-				return ErrItemNotFound
-			}
-			return err
-		} else {
-			itemIDItemMaster[p.ItemID] = i
-		}
+	itemIDItemMaster := make(map[int64]*ItemMaster)
+	for i := range itemMasters {
+		im := itemMasters[i]
+		itemIDItemMaster[im.ID] = im
+	}
+
+	args = make([]interface{}, 0, len(presents)*2)
+	for _, p := range presents {
+		args = append(args, p.UserID, p.ItemID)
+	}
+
+	var userItems []*UserItem
+	conds = make([]string, 0, len(presents))
+	for i := 0; i < len(presents); i++ {
+		conds = append(conds, "(user_id = ? AND item_id = ?)")
+	}
+	query = "SELECT * FROM user_items WHERE " + strings.Join(conds, " OR ")
+	if err := tx.Select(&userItems, query, args...); err != nil {
+		return err
 	}
 
 	userIDItemIDItem := make(map[int64]map[int64]*UserItem)
-	for _, p := range presents {
-		imas := itemIDItemMaster[p.ItemID]
-
-		query := "SELECT * FROM user_items WHERE user_id=? AND item_id=?"
-		uitem := new(UserItem)
-		if err := tx.Get(uitem, query, p.UserID, imas.ID); err != nil {
-			if err != sql.ErrNoRows {
-				return err
-			}
-			uitem = nil
+	for i := range userItems {
+		ui := userItems[i]
+		if _, ok := userIDItemIDItem[ui.UserID]; !ok {
+			userIDItemIDItem[ui.UserID] = make(map[int64]*UserItem)
 		}
-		if _, ok := userIDItemIDItem[p.UserID]; !ok {
-			userIDItemIDItem[p.UserID] = make(map[int64]*UserItem)
-		}
-		userIDItemIDItem[p.UserID][p.ItemID] = uitem
+		userIDItemIDItem[ui.UserID][ui.ItemID] = ui
 	}
 
 	var uitems []*UserItem
@@ -746,7 +755,7 @@ func (h *Handler) updateItems(tx *sqlx.Tx, presents []*UserPresent, requestAt in
 		uitems = append(uitems, uitem)
 	}
 
-	query := "INSERT INTO user_items(id, user_id, item_id, item_type, amount, created_at, updated_at)" +
+	query = "INSERT INTO user_items(id, user_id, item_id, item_type, amount, created_at, updated_at)" +
 		"VALUES (:id, :user_id, :item_id, :item_type, :amount, :created_at, :updated_at)" +
 		"ON DUPLICATE KEY UPDATE amount=VALUES(amount), updated_at=VALUES(updated_at)"
 	if _, err := tx.NamedExec(query, uitems); err != nil {
