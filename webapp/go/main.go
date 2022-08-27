@@ -572,6 +572,55 @@ func (h *Handler) addUserCard(tx *sqlx.Tx, userID, itemID int64, itemType int, r
 	return nil
 }
 
+func (h *Handler) addUserCards(tx *sqlx.Tx, items []*UserPresent, requestAt int64) error {
+	itemType := 2
+
+	itemIDItemMaster := make(map[int64]*ItemMaster)
+	for _, item := range items {
+		if itemIDItemMaster[item.ItemID] != nil {
+			continue
+		}
+
+		query := "SELECT * FROM item_masters WHERE id=? AND item_type=?"
+		i := new(ItemMaster)
+		if err := tx.Get(i, query, item.ItemID, itemType); err != nil {
+			if err == sql.ErrNoRows {
+				return ErrItemNotFound
+			}
+			return err
+		} else {
+			itemIDItemMaster[item.ItemID] = i
+		}
+	}
+
+	cards := make([]*UserCard, len(items))
+	for i, item := range items {
+		cID, err := h.generateID()
+		if err != nil {
+			return err
+		}
+		im := itemIDItemMaster[item.ItemID]
+		card := &UserCard{
+			ID:           cID,
+			UserID:       item.UserID,
+			CardID:       im.ID,
+			AmountPerSec: *im.AmountPerSec,
+			Level:        1,
+			TotalExp:     0,
+			CreatedAt:    requestAt,
+			UpdatedAt:    requestAt,
+		}
+		cards[i] = card
+	}
+
+	query := "INSERT INTO user_cards(id, user_id, card_id, amount_per_sec, level, total_exp, created_at, updated_at) " +
+		"VALUES (:id, :user_id, :card_id, :amount_per_sec, :level, :total_exp, :created_at, :updated_at)"
+	if _, err := tx.NamedExec(query, cards); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (h *Handler) updateItem(tx *sqlx.Tx, userID, itemID int64, itemType int, obtainAmount int64, requestAt int64) error {
 	query := "SELECT * FROM item_masters WHERE id=? AND item_type=?"
 	item := new(ItemMaster)
@@ -632,6 +681,20 @@ func (h *Handler) obtainItem(tx *sqlx.Tx, userID, itemID int64, itemType int, ob
 	default:
 		return ErrInvalidItemType
 	}
+}
+
+func (h *Handler) obtainItems(tx *sqlx.Tx, items []*UserPresent, itemType int, requestAt int64) error {
+	switch itemType {
+	//case 1:
+	//	return h.updateUserCoins(tx, userID, obtainAmount)
+	case 2: // card(ハンマー)
+		return h.addUserCards(tx, items, requestAt)
+	case 3, 4: // 強化素材
+		//return h.updateItem(tx, userID, itemID, itemType, obtainAmount, requestAt)
+	default:
+		return ErrInvalidItemType
+	}
+	return nil
 }
 
 // initialize 初期化処理
@@ -1317,6 +1380,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 
 	// 配布処理
 	userIdxCoinMap := make(map[int64]int)
+	var userCards []*UserPresent
 	for i := range obtainPresent {
 		if obtainPresent[i].DeletedAt != nil {
 			return errorResponse(c, http.StatusInternalServerError, fmt.Errorf("received present"))
@@ -1336,6 +1400,13 @@ func (h *Handler) receivePresent(c echo.Context) error {
 			userIdxCoinMap[v.UserID] += obtainPresent[i].Amount
 			continue
 		}
+
+		// when item is usercard
+		if v.ItemType == 2 {
+			userCards = append(userCards, v)
+			continue
+		}
+
 		err = h.obtainItem(tx, v.UserID, v.ItemID, v.ItemType, int64(v.Amount), requestAt)
 		if err != nil {
 			if err == ErrUserNotFound || err == ErrItemNotFound {
@@ -1350,7 +1421,21 @@ func (h *Handler) receivePresent(c echo.Context) error {
 
 	// bulk update coin
 	for key, val := range userIdxCoinMap {
-		err = h.obtainItem(tx, key, 0, 1, int64(val), 0)
+		err = h.updateUserCoins(tx, key, int64(val))
+		if err != nil {
+			if err == ErrUserNotFound || err == ErrItemNotFound {
+				return errorResponse(c, http.StatusNotFound, err)
+			}
+			if err == ErrInvalidItemType {
+				return errorResponse(c, http.StatusBadRequest, err)
+			}
+			return errorResponse(c, http.StatusInternalServerError, err)
+		}
+	}
+
+	// bulk update usercards
+	if len(userCards) > 0 {
+		err = h.addUserCards(tx, userCards, requestAt)
 		if err != nil {
 			if err == ErrUserNotFound || err == ErrItemNotFound {
 				return errorResponse(c, http.StatusNotFound, err)
