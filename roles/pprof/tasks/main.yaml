@@ -15,7 +15,7 @@
   ignore_errors: yes
   command:
     argv:
-      - "/home/isucon/local/go/bin/go"
+      - "/home/isucon/local/golang/bin/go"
       - "tool"
       - "pprof"
       - "-seconds"

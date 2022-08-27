@@ -22,7 +22,7 @@
   become: no
 
 - name: App binary is built
-  command: "/home/isucon/local/go/bin/go build -o {{ app_name }}"
+  command: "/home/isucon/local/golang/bin/go build -o {{ app_name }}"
   args:
     chdir: "{{ deploy_app_dir }}/go"
   environment:

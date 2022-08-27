@@ -7,6 +7,7 @@
 
 - name: Run alp
   when: collect_access_log | default(false)
+  become: yes
   shell: "cat /var/log/nginx/access.log | alp ltsv {{ alp_option }}"
   register: alp
 
