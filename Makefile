@@ -42,6 +42,7 @@ deploy-%:
 
 .PHONY: bench
 bench:
+	$(PLAYBOOK_COMMAND) playbooks/enable_slow_query.yml
 	$(PLAYBOOK_COMMAND) playbooks/bench.yml
 
 .PHONY: download-bench-results
