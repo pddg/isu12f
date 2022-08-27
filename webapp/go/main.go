@@ -514,6 +514,7 @@ func (h *Handler) obtainItem(tx *sqlx.Tx, userID, itemID int64, itemType int, ob
 	obtainItems := make([]*UserItem, 0)
 
 	switch itemType {
+	//todo コインは簡単にまとめて追加できる
 	case 1: // coin
 		user := new(User)
 		query := "SELECT * FROM users WHERE id=?"
@@ -1299,6 +1300,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 	defer tx.Rollback() //nolint:errcheck
 
 	// 配布処理
+	updatePresents := make([]*UserPresent, len(obtainPresent))
 	for i := range obtainPresent {
 		if obtainPresent[i].DeletedAt != nil {
 			return errorResponse(c, http.StatusInternalServerError, fmt.Errorf("received present"))
@@ -1307,11 +1309,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 		obtainPresent[i].UpdatedAt = requestAt
 		obtainPresent[i].DeletedAt = &requestAt
 		v := obtainPresent[i]
-		query = "UPDATE user_presents SET deleted_at=?, updated_at=? WHERE id=?"
-		_, err := tx.Exec(query, requestAt, requestAt, v.ID)
-		if err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		updatePresents = append(updatePresents, obtainPresent[i])
 
 		_, _, _, err = h.obtainItem(tx, v.UserID, v.ItemID, v.ItemType, int64(v.Amount), requestAt)
 		if err != nil {
@@ -1323,6 +1321,12 @@ func (h *Handler) receivePresent(c echo.Context) error {
 			}
 			return errorResponse(c, http.StatusInternalServerError, err)
 		}
+	}
+
+	query = "INSERT INTO user_presents (`id`,`deleted_at`,`updated_at`) VALUES (:id,:deleted_at,:updated_at) ON DUPLICATE KEY UPDATE deleted_at = VALUES(:updated_at), updated_at=VALUES(:updated_at)"
+	_, err = tx.NamedExec(query, updatePresents)
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	err = tx.Commit()
