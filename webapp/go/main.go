@@ -443,6 +443,20 @@ func (h *Handler) obtainPresent(tx *sqlx.Tx, userID int64, requestAt int64) ([]*
 
 	// 全員プレゼント取得情報更新
 	obtainPresents := make([]*UserPresent, 0)
+
+	var receivedHistories []*UserPresentAllReceivedHistory
+	presentsIDs := make([]int64, 0, len(normalPresents))
+	for _, np := range normalPresents {
+		presentsIDs = append(presentsIDs, np.ID)
+	}
+	q, args, err := sqlx.In("SELECT * FROM user_present_all_received_history WHERE user_id=? AND present_all_id in (?)", userID, presentsIDs)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Get(receivedHistories, q, args...); err != nil {
+		return nil, err
+	}
+
 	for _, np := range normalPresents {
 		received := new(UserPresentAllReceivedHistory)
 		query = "SELECT * FROM user_present_all_received_history WHERE user_id=? AND present_all_id=?"
