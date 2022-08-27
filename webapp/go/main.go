@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1148,18 +1149,35 @@ func (h *Handler) listGacha(c echo.Context) error {
 	}
 
 	// ガチャ排出アイテム取得
+	var gachaItemMasters []*GachaItemMaster
+	gachaIDs := make([]int64, 0, len(gachaMasterList))
+	for _, gm := range gachaMasterList {
+		gachaIDs = append(gachaIDs, gm.ID)
+	}
+	query, args, err := sqlx.In("SELECT * FROM gacha_item_masters WHERE gacha_id IN (?)", gachaIDs)
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	if err := h.DB.Select(&gachaItemMasters, query, args...); err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+
 	gachaDataList := make([]*GachaData, 0)
-	query = "SELECT * FROM gacha_item_masters WHERE gacha_id=? ORDER BY id ASC"
 	for _, v := range gachaMasterList {
 		var gachaItem []*GachaItemMaster
-		err = h.DB.Select(&gachaItem, query, v.ID)
-		if err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
+		for _, gim := range gachaItemMasters {
+			if gim.GachaID == v.ID {
+				gachaItem = append(gachaItem, gim)
+			}
 		}
 
 		if len(gachaItem) == 0 {
 			return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item"))
 		}
+
+		sort.Slice(gachaItem, func(i, j int) bool {
+			return gachaItem[i].ID < gachaItem[j].ID
+		})
 
 		gachaDataList = append(gachaDataList, &GachaData{
 			Gacha:     v,
