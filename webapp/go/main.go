@@ -1934,7 +1934,8 @@ func noContentResponse(c echo.Context, status int) error {
 
 // generateID uniqueなIDを生成する
 func (h *Handler) generateID() (int64, error) {
-	return time.Now().UnixNano(), nil
+	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return rnd.Int63(), nil
 }
 
 // generateSessionID
