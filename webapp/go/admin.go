@@ -22,7 +22,7 @@ func (h *Handler) adminSessionCheckMiddleware(next echo.HandlerFunc) echo.Handle
 
 		adminSession := new(Session)
 		query := "SELECT * FROM admin_sessions WHERE session_id=? AND deleted_at IS NULL"
-		if err := h.DB.Get(adminSession, query, sessID); err != nil {
+		if err := h.AdminDB.Get(adminSession, query, sessID); err != nil {
 			if err == sql.ErrNoRows {
 				return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
 			}
@@ -36,7 +36,7 @@ func (h *Handler) adminSessionCheckMiddleware(next echo.HandlerFunc) echo.Handle
 
 		if adminSession.ExpiredAt < requestAt {
 			query = "UPDATE admin_sessions SET deleted_at=? WHERE session_id=?"
-			if _, err = h.DB.Exec(query, requestAt, sessID); err != nil {
+			if _, err = h.AdminDB.Exec(query, requestAt, sessID); err != nil {
 				return errorResponse(c, http.StatusInternalServerError, err)
 			}
 			return errorResponse(c, http.StatusUnauthorized, ErrExpiredSession)
@@ -65,7 +65,7 @@ func (h *Handler) adminLogin(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
 	}
 
-	tx, err := h.DB.Beginx()
+	tx, err := h.AdminDB.Beginx()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -150,7 +150,7 @@ func (h *Handler) adminLogout(c echo.Context) error {
 	}
 	// すでにあるsessionをdeleteにする
 	query := "UPDATE admin_sessions SET deleted_at=? WHERE session_id=? AND deleted_at IS NULL"
-	if _, err = h.DB.Exec(query, requestAt, sessID); err != nil {
+	if _, err = h.AdminDB.Exec(query, requestAt, sessID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
