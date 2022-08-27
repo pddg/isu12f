@@ -1478,15 +1478,10 @@ func (h *Handler) receivePresent(c echo.Context) error {
 		obtainPresent[i].UpdatedAt = requestAt
 		obtainPresent[i].DeletedAt = &requestAt
 		v := obtainPresent[i]
-		query = "UPDATE user_presents SET deleted_at=?, updated_at=? WHERE id=?"
-		_, err := tx.Exec(query, requestAt, requestAt, v.ID)
-		if err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
 
 		// when item is coin
 		if v.ItemType == 1 {
-			userIdxCoinMap[v.UserID] += obtainPresent[i].Amount
+			userIdxCoinMap[v.UserID] += v.Amount
 			continue
 		}
 
@@ -1555,6 +1550,15 @@ func (h *Handler) receivePresent(c echo.Context) error {
 			}
 			return errorResponse(c, http.StatusInternalServerError, err)
 		}
+	}
+
+	//bulk update obtainpresents
+	query = "INSERT INTO user_presents(id, user_id, sent_at, item_type, item_id, amount, present_message, created_at, updated_at, deleted_at)" +
+		"VALUES (:id, :user_id, :sent_at, :item_type, :item_id, :amount, :present_message,:created_at, :updated_at, :deleted_at)" +
+		"ON DUPLICATE KEY UPDATE deleted_at=VALUES(deleted_at), updated_at=VALUES(updated_at)"
+	_, err = tx.NamedExec(query, obtainPresent)
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	err = tx.Commit()
