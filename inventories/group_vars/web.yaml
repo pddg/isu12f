@@ -2,6 +2,6 @@ webapp_listen_port: 8080
 
 collect_pprof_profile: yes
 
-alp_option: "-r -m '/user/[0-9]+/gacha/index,/user/[0-9]+/gacha/draw/[0-9]+,/user/[0-9]+/home,/user/[0-9]+/reward,/user/[0-9]+/card,/user/[0-9]+/item,/user/[0-9]+/present/receive,/user/[0-9]+/present/index/[0-9]+,/admin/user/[0-9]+'"
+alp_option: "-r -m '/user/[0-9]+/gacha/index,/user/[0-9]+/gacha/draw/[0-9]+,/user/[0-9]+/home,/user/[0-9]+/reward,/user/[0-9]+/card/addexp/[0-9]+,/user/[0-9]+/card,/user/[0-9]+/item,/user/[0-9]+/present/receive,/user/[0-9]+/present/index/[0-9]+,/admin/user/[0-9]+/ban,/admin/user/[0-9]+'"
 github_bench_issue_number: 1
 
