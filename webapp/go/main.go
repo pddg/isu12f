@@ -161,6 +161,22 @@ func (h *Handler) adminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
+func checkMasterVersion(xMasterVersion string) error {
+	masterMutex.RLock()
+	defer masterMutex.Unlock()
+	var masterVersion *VersionMaster
+	for _, version := range masterCache.VersionMaster {
+		if version.Status == 1 {
+			masterVersion = version
+		}
+	}
+
+	if masterVersion.MasterVersion != xMasterVersion {
+		return ErrInvalidMasterVersion
+	}
+	return nil
+}
+
 // apiMiddleware
 func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
@@ -171,17 +187,8 @@ func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		c.Set("requestTime", requestAt.Unix())
 
 		// マスタ確認
-		masterMutex.RLock()
-		defer masterMutex.Unlock()
-		var masterVersion *VersionMaster
-		for _, version := range masterCache.VersionMaster {
-			if version.Status == 1 {
-				masterVersion = version
-			}
-		}
-
-		if masterVersion.MasterVersion != c.Request().Header.Get("x-master-version") {
-			return errorResponse(c, http.StatusUnprocessableEntity, ErrInvalidMasterVersion)
+		if err := checkMasterVersion(c.Request().Header.Get("x-master-version")); err != nil {
+			return errorResponse(c, http.StatusUnprocessableEntity, err)
 		}
 
 		// check ban
