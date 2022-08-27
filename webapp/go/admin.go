@@ -219,9 +219,9 @@ func (h *Handler) adminListMaster(c echo.Context) error {
 			return errorResponse(c, http.StatusInternalServerError, err)
 		}
 		masterMutex.Lock()
+		defer masterMutex.Unlock()
 		masterCache = resp
-		successResponse(c, resp)
-		masterMutex.Unlock()
+		return successResponse(c, resp)
 	}
 	masterMutex.RLock()
 	defer masterMutex.RUnlock()
