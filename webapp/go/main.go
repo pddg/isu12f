@@ -163,7 +163,7 @@ func (h *Handler) adminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 func checkMasterVersion(xMasterVersion string) error {
 	masterMutex.RLock()
-	defer masterMutex.Unlock()
+	defer masterMutex.RUnlock()
 	var masterVersion *VersionMaster
 	for _, version := range masterCache.VersionMaster {
 		if version.Status == 1 {
