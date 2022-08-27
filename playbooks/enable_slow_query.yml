@@ -2,6 +2,7 @@
 - hosts: db
   roles:
     - name: slowquery
+      become: yes
       vars:
         slowquery_database_type: mysql
         slowquery_db_user: "{{ mysql_root_user }}"
