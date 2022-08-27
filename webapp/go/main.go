@@ -48,7 +48,8 @@ const (
 )
 
 type Handler struct {
-	DB *sqlx.DB
+	DB      *sqlx.DB
+	AdminDB *sqlx.DB
 }
 
 func main() {
@@ -71,11 +72,17 @@ func main() {
 		e.Logger.Fatalf("failed to connect to db: %v", err)
 	}
 	defer dbx.Close()
+	adminDbx, err := connectAdminDB(false)
+	if err != nil {
+		e.Logger.Fatalf("failed to connect to db: %v", err)
+	}
+	defer dbx.Close()
 
 	// setting server
 	e.Server.Addr = fmt.Sprintf(":%v", "8080")
 	h := &Handler{
 		DB: dbx,
+		AdminDB: adminDbx,
 	}
 
 	// e.Use(middleware.CORS())
@@ -120,6 +127,24 @@ func connectDB(batch bool) (*sqlx.DB, error) {
 		getEnv("ISUCON_DB_USER", "isucon"),
 		getEnv("ISUCON_DB_PASSWORD", "isucon"),
 		getEnv("ISUCON_DB_HOST", "127.0.0.1"),
+		getEnv("ISUCON_DB_PORT", "3306"),
+		getEnv("ISUCON_DB_NAME", "isucon"),
+		"Asia%2FTokyo",
+		batch,
+	)
+	dbx, err := sqlx.Open("mysql", dsn)
+	if err != nil {
+		return nil, err
+	}
+	return dbx, nil
+}
+
+func connectAdminDB(batch bool) (*sqlx.DB, error) {
+	dsn := fmt.Sprintf(
+		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=%s&multiStatements=%t&interpolateParams=true",
+		getEnv("ISUCON_DB_USER", "isucon"),
+		getEnv("ISUCON_DB_PASSWORD", "isucon"),
+		getEnv("ISUCON_ADMIN_DB_HOST", "127.0.0.1"),
 		getEnv("ISUCON_DB_PORT", "3306"),
 		getEnv("ISUCON_DB_NAME", "isucon"),
 		"Asia%2FTokyo",

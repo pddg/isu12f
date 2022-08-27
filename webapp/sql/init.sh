@@ -3,6 +3,7 @@ set -ex
 cd `dirname $0`
 
 ISUCON_DB_HOST=${ISUCON_DB_HOST:-127.0.0.1}
+ISUCON_ADMIN_DB_HOST=${ISUCON_ADMIN_DB_HOST:-127.0.0.1}
 ISUCON_DB_PORT=${ISUCON_DB_PORT:-3306}
 ISUCON_DB_USER=${ISUCON_DB_USER:-isucon}
 ISUCON_DB_PASSWORD=${ISUCON_DB_PASSWORD:-isucon}
@@ -36,3 +37,16 @@ echo "LOAD DATA INFILE '${SECURE_DIR}5_user_presents_not_receive_data.tsv' REPLA
         --host "$ISUCON_DB_HOST" \
         --port "$ISUCON_DB_PORT" \
         "$ISUCON_DB_NAME" 
+
+# Initialize Admin DB
+mysql -u"$ISUCON_DB_USER" \
+		-p"$ISUCON_DB_PASSWORD" \
+		--host "$ISUCON_ADMIN_DB_HOST" \
+		--port "$ISUCON_DB_PORT" \
+		"$ISUCON_DB_NAME" < 3_schema_exclude_user_presents.sql
+
+mysql -u"$ISUCON_DB_USER" \
+		-p"$ISUCON_DB_PASSWORD" \
+		--host "$ISUCON_ADMIN_DB_HOST" \
+		--port "$ISUCON_DB_PORT" \
+		"$ISUCON_DB_NAME" < 4_alldata_exclude_user_presents.sql
