@@ -637,6 +637,8 @@ func (h *Handler) obtainItem(tx *sqlx.Tx, userID, itemID int64, itemType int, ob
 // initialize 初期化処理
 // POST /initialize
 func initialize(c echo.Context) error {
+	rand.Seed(time.Now().UnixNano())
+
 	dbx, err := connectDB(true)
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -1934,8 +1936,7 @@ func noContentResponse(c echo.Context, status int) error {
 
 // generateID uniqueなIDを生成する
 func (h *Handler) generateID() (int64, error) {
-	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
-	return rnd.Int63(), nil
+	return rand.Int63(), nil
 }
 
 // generateSessionID
