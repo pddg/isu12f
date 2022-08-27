@@ -684,6 +684,77 @@ func (h *Handler) updateItem(tx *sqlx.Tx, userID, itemID int64, itemType int, ob
 	return nil
 }
 
+func (h *Handler) updateItems(tx *sqlx.Tx, presents []*UserPresent, requestAt int64) error {
+	itemIDItemMaster := make(map[int64]*ItemMaster)
+	for _, p := range presents {
+		if itemIDItemMaster[p.ItemID] != nil {
+			continue
+		}
+
+		query := "SELECT * FROM item_masters WHERE id=? AND item_type=?"
+		i := new(ItemMaster)
+		if err := tx.Get(i, query, p.ItemID, p.ItemType); err != nil {
+			if err == sql.ErrNoRows {
+				return ErrItemNotFound
+			}
+			return err
+		} else {
+			itemIDItemMaster[p.ItemID] = i
+		}
+	}
+
+	userIDItemIDItem := make(map[int64]map[int64]*UserItem)
+	for _, p := range presents {
+		imas := itemIDItemMaster[p.ItemID]
+
+		query := "SELECT * FROM user_items WHERE user_id=? AND item_id=?"
+		uitem := new(UserItem)
+		if err := tx.Get(uitem, query, p.UserID, imas.ID); err != nil {
+			if err != sql.ErrNoRows {
+				return err
+			}
+			uitem = nil
+		}
+		if _, ok := userIDItemIDItem[p.UserID]; !ok {
+			userIDItemIDItem[p.UserID] = make(map[int64]*UserItem)
+		}
+		userIDItemIDItem[p.UserID][p.ItemID] = uitem
+	}
+
+	var uitems []*UserItem
+	for _, p := range presents {
+		imas := itemIDItemMaster[p.ItemID]
+		uitem := userIDItemIDItem[p.UserID][p.ItemID]
+		if uitem == nil {
+			uitemID, err := h.generateID()
+			if err != nil {
+				return err
+			}
+			uitem = &UserItem{
+				ID:        uitemID,
+				UserID:    p.UserID,
+				ItemType:  imas.ItemType,
+				ItemID:    imas.ID,
+				Amount:    p.Amount,
+				CreatedAt: requestAt,
+				UpdatedAt: requestAt,
+			}
+		} else { // 更新
+			uitem.Amount += p.Amount
+			uitem.UpdatedAt = requestAt
+		}
+		uitems = append(uitems, uitem)
+	}
+
+	query := "INSERT INTO user_items(id, user_id, item_id, item_type, amount, created_at, updated_at)" +
+		"VALUES (:id, :user_id, :item_id, :item_type, :amount, :created_at, :updated_at)" +
+		"ON DUPLICATE KEY UPDATE amount=VALUES(amount), updated_at=VALUES(updated_at)"
+	if _, err := tx.NamedExec(query, uitems); err != nil {
+		return err
+	}
+	return nil
+}
+
 // obtainItem アイテム付与処理
 func (h *Handler) obtainItem(tx *sqlx.Tx, userID, itemID int64, itemType int, obtainAmount int64, requestAt int64) error {
 	switch itemType {
@@ -1398,6 +1469,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 	// 配布処理
 	userIdxCoinMap := make(map[int64]int)
 	var userCards []*UserPresent
+	var updateItems []*UserPresent
 	for i := range obtainPresent {
 		if obtainPresent[i].DeletedAt != nil {
 			return errorResponse(c, http.StatusInternalServerError, fmt.Errorf("received present"))
@@ -1424,6 +1496,13 @@ func (h *Handler) receivePresent(c echo.Context) error {
 			continue
 		}
 
+		// when item is usercard
+		if v.ItemType == 3 || v.ItemType == 4 {
+			updateItems = append(updateItems, v)
+			continue
+		}
+
+		// may not reaches here
 		err = h.obtainItem(tx, v.UserID, v.ItemID, v.ItemType, int64(v.Amount), requestAt)
 		if err != nil {
 			if err == ErrUserNotFound || err == ErrItemNotFound {
@@ -1453,6 +1532,20 @@ func (h *Handler) receivePresent(c echo.Context) error {
 	// bulk update usercards
 	if len(userCards) > 0 {
 		err = h.addUserCards(tx, userCards, requestAt)
+		if err != nil {
+			if err == ErrUserNotFound || err == ErrItemNotFound {
+				return errorResponse(c, http.StatusNotFound, err)
+			}
+			if err == ErrInvalidItemType {
+				return errorResponse(c, http.StatusBadRequest, err)
+			}
+			return errorResponse(c, http.StatusInternalServerError, err)
+		}
+	}
+
+	// bulk update updateItems
+	if len(updateItems) > 0 {
+		err = h.updateItems(tx, updateItems, requestAt)
 		if err != nil {
 			if err == ErrUserNotFound || err == ErrItemNotFound {
 				return errorResponse(c, http.StatusNotFound, err)
