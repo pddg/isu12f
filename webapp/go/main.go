@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -13,8 +14,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	_ "github.com/go-sql-driver/mysql"
-
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo-contrib/pprof"
@@ -48,7 +49,8 @@ const (
 )
 
 type Handler struct {
-	DB *sqlx.DB
+	DB    *sqlx.DB
+	Redis *redis.Client
 }
 
 func main() {
@@ -72,10 +74,23 @@ func main() {
 	}
 	defer dbx.Close()
 
+	// connect redis
+	redisClient := redis.NewClient(&redis.Options{
+		Addr: fmt.Sprintf("%s:%s",
+			getEnv("REDIS_HOST", "localhost"),
+			getEnv("REDIS_PORT", "6379"),
+		),
+	})
+	if err := redisClient.Ping(context.TODO()).Err(); err != nil {
+		e.Logger.Fatalf("failed to connect to redis: %v", err)
+	}
+	defer redisClient.Close()
+
 	// setting server
 	e.Server.Addr = fmt.Sprintf(":%v", "8080")
 	h := &Handler{
-		DB: dbx,
+		DB:    dbx,
+		Redis: redisClient,
 	}
 
 	// e.Use(middleware.CORS())
