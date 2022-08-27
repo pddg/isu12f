@@ -9,6 +9,8 @@ Environment=ISUCON_DB_HOST=127.0.0.1
 Environment=ISUCON_DB_PORT=3306
 Environment=ISUCON_DB_NAME=isucon
 Environment=SERVER_APP_PORT=8080
+Environment=REDIS_HOST=133.152.6.252
+Environment=REDIS_PORT=6379
 PIDFile=/home/isucon/webapp/go/server.pid
 
 User=isucon
