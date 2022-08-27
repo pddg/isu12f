@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -74,6 +73,13 @@ func main() {
 		e.Logger.Fatalf("failed to connect to db: %v", err)
 	}
 	defer dbx.Close()
+	for {
+		if err := dbx.Ping(); err != nil {
+			e.Logger.Errorf("failed to ping db: %v", err)
+			continue
+		}
+		break
+	}
 
 	// connect redis
 	redisClient := redis.NewClient(&redis.Options{
@@ -82,9 +88,9 @@ func main() {
 			getEnv("REDIS_PORT", "6379"),
 		),
 	})
-	if err := redisClient.Ping(context.TODO()).Err(); err != nil {
-		e.Logger.Fatalf("failed to connect to redis: %v", err)
-	}
+	//if err := redisClient.Ping(context.TODO()).Err(); err != nil {
+	//	e.Logger.Fatalf("failed to connect to redis: %v", err)
+	//}
 	defer redisClient.Close()
 
 	// setting server
