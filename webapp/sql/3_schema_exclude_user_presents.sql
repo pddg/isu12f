@@ -131,6 +131,8 @@ CREATE TABLE `user_present_all_received_history` (
   `deleted_at` bigint default NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+CREATE INDEX user_present_all_received_history_user_id_present_all_id_index
+    ON isucon.user_present_all_received_history (user_id, present_all_id);
 
 /* ガチャマスタ */
 
