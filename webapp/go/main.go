@@ -97,7 +97,7 @@ func main() {
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{}))
 
 	// utility
-	e.POST("/initialize", initialize)
+	e.POST("/initialize", h.initialize)
 	e.GET("/health", h.health)
 
 	// feature
@@ -171,13 +171,13 @@ func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		c.Set("requestTime", requestAt.Unix())
 
 		// マスタ確認
-		query := "SELECT * FROM version_masters WHERE status=1"
-		masterVersion := new(VersionMaster)
-		if err := h.DB.Get(masterVersion, query); err != nil {
-			if err == sql.ErrNoRows {
-				return errorResponse(c, http.StatusNotFound, fmt.Errorf("active master version is not found"))
+		masterMutex.RLock()
+		defer masterMutex.Unlock()
+		var masterVersion *VersionMaster
+		for _, version := range masterCache.VersionMaster {
+			if version.Status == 1 {
+				masterVersion = version
 			}
-			return errorResponse(c, http.StatusInternalServerError, err)
 		}
 
 		if masterVersion.MasterVersion != c.Request().Header.Get("x-master-version") {
@@ -785,9 +785,8 @@ func (h *Handler) obtainItems(tx *sqlx.Tx, items []*UserPresent, itemType int, r
 
 // initialize 初期化処理
 // POST /initialize
-func initialize(c echo.Context) error {
+func (h *Handler) initialize(c echo.Context) error {
 	rand.Seed(time.Now().UnixNano())
-
 	dbx, err := connectDB(true)
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -799,6 +798,13 @@ func initialize(c echo.Context) error {
 		c.Logger().Errorf("Failed to initialize %s: %v", string(out), err)
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
+	data, err := getMasterData(h.DB)
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	masterMutex.Lock()
+	masterCache = data
+	masterMutex.Unlock()
 
 	return successResponse(c, &InitializeResponse{
 		Language: "go",
