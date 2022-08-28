@@ -572,13 +572,15 @@ func (h *Handler) updateUserCoins(tx *sqlx.Tx, userID int64, obtainAmount int64)
 }
 
 func (h *Handler) addUserCard(tx *sqlx.Tx, userID, itemID int64, itemType int, requestAt int64) error {
-	query := "SELECT * FROM item_masters WHERE id=? AND item_type=?"
 	item := new(ItemMaster)
-	if err := tx.Get(item, query, itemID, itemType); err != nil {
-		if err == sql.ErrNoRows {
-			return ErrItemNotFound
+	for _, im := range getItemMasters() {
+		if im.ID == itemID && im.ItemType == itemType {
+			item = im
+			break
 		}
-		return err
+	}
+	if item == nil {
+		return ErrItemNotFound
 	}
 
 	cID, err := h.generateID()
@@ -595,7 +597,7 @@ func (h *Handler) addUserCard(tx *sqlx.Tx, userID, itemID int64, itemType int, r
 		CreatedAt:    requestAt,
 		UpdatedAt:    requestAt,
 	}
-	query = "INSERT INTO user_cards(id, user_id, card_id, amount_per_sec, level, total_exp, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+	query := "INSERT INTO user_cards(id, user_id, card_id, amount_per_sec, level, total_exp, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 	if _, err := tx.Exec(query, card.ID, card.UserID, card.CardID, card.AmountPerSec, card.Level, card.TotalExp, card.CreatedAt, card.UpdatedAt); err != nil {
 		return err
 	}
@@ -606,20 +608,18 @@ func (h *Handler) addUserCards(tx *sqlx.Tx, items []*UserPresent, requestAt int6
 	itemType := 2
 
 	itemIDItemMaster := make(map[int64]*ItemMaster)
+	allItemMasters := getItemMasters()
 	for _, item := range items {
-		if itemIDItemMaster[item.ItemID] != nil {
-			continue
-		}
-
-		query := "SELECT * FROM item_masters WHERE id=? AND item_type=?"
-		i := new(ItemMaster)
-		if err := tx.Get(i, query, item.ItemID, itemType); err != nil {
-			if err == sql.ErrNoRows {
-				return ErrItemNotFound
+		found := false
+		for _, im := range allItemMasters {
+			if im.ID == item.ItemID && im.ItemType == itemType {
+				itemIDItemMaster[item.ItemID] = im
+				found = true
+				break
 			}
-			return err
-		} else {
-			itemIDItemMaster[item.ItemID] = i
+		}
+		if !found {
+			return ErrItemNotFound
 		}
 	}
 
@@ -652,16 +652,19 @@ func (h *Handler) addUserCards(tx *sqlx.Tx, items []*UserPresent, requestAt int6
 }
 
 func (h *Handler) updateItem(tx *sqlx.Tx, userID, itemID int64, itemType int, obtainAmount int64, requestAt int64) error {
-	query := "SELECT * FROM item_masters WHERE id=? AND item_type=?"
 	item := new(ItemMaster)
-	if err := tx.Get(item, query, itemID, itemType); err != nil {
-		if err == sql.ErrNoRows {
-			return ErrItemNotFound
+	for _, im := range getItemMasters() {
+		if im.ID == itemID && im.ItemType == itemType {
+			item = im
+			break
 		}
-		return err
 	}
+	if item == nil {
+		return ErrItemNotFound
+	}
+
 	// 所持数取得
-	query = "SELECT * FROM user_items WHERE user_id=? AND item_id=?"
+	query := "SELECT * FROM user_items WHERE user_id=? AND item_id=?"
 	uitem := new(UserItem)
 	if err := tx.Get(uitem, query, userID, item.ID); err != nil {
 		if err != sql.ErrNoRows {
@@ -701,17 +704,13 @@ func (h *Handler) updateItem(tx *sqlx.Tx, userID, itemID int64, itemType int, ob
 
 func (h *Handler) updateItems(tx *sqlx.Tx, presents []*UserPresent, requestAt int64) error {
 	var itemMasters []*ItemMaster
-	args := make([]interface{}, 0, len(presents)*2)
-	for _, p := range presents {
-		args = append(args, p.ItemID, p.ItemType)
-	}
-	conds := make([]string, 0, len(presents))
-	for i := 0; i < len(presents); i++ {
-		conds = append(conds, "(id = ? AND item_type = ?)")
-	}
-	query := "SELECT * FROM item_masters WHERE " + strings.Join(conds, " OR ")
-	if err := tx.Select(&itemMasters, query, args...); err != nil {
-		return err
+	for _, im := range getItemMasters() {
+		for _, p := range presents {
+			if im.ID == p.ItemID && im.ItemType == p.ItemType {
+				itemMasters = append(itemMasters, im)
+				break
+			}
+		}
 	}
 
 	itemIDItemMaster := make(map[int64]*ItemMaster)
@@ -720,17 +719,17 @@ func (h *Handler) updateItems(tx *sqlx.Tx, presents []*UserPresent, requestAt in
 		itemIDItemMaster[im.ID] = im
 	}
 
-	args = make([]interface{}, 0, len(presents)*2)
+	args := make([]interface{}, 0, len(presents)*2)
 	for _, p := range presents {
 		args = append(args, p.UserID, p.ItemID)
 	}
 
 	var userItems []*UserItem
-	conds = make([]string, 0, len(presents))
+	conds := make([]string, 0, len(presents))
 	for i := 0; i < len(presents); i++ {
 		conds = append(conds, "(user_id = ? AND item_id = ?)")
 	}
-	query = "SELECT * FROM user_items WHERE " + strings.Join(conds, " OR ")
+	query := "SELECT * FROM user_items WHERE " + strings.Join(conds, " OR ")
 	if err := tx.Select(&userItems, query, args...); err != nil {
 		return err
 	}
@@ -901,12 +900,14 @@ func (h *Handler) createUser(c echo.Context) error {
 
 	// 初期デッキ付与
 	initCard := new(ItemMaster)
-	query = "SELECT * FROM item_masters WHERE id=?"
-	if err = tx.Get(initCard, query, 2); err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusNotFound, ErrItemNotFound)
+	for _, im := range getItemMasters() {
+		if im.ID == 2 {
+			initCard = im
+			break
 		}
-		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	if initCard == nil {
+		return errorResponse(c, http.StatusNotFound, ErrItemNotFound)
 	}
 
 	initCards := make([]*UserCard, 0, 3)
@@ -1742,11 +1743,12 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 	}
 
 	// get target card
+	allItemMasters := getItemMasters()
+
 	card := new(TargetUserCardData)
 	query := `
-	SELECT uc.id , uc.user_id , uc.card_id , uc.amount_per_sec , uc.level, uc.total_exp, im.amount_per_sec as 'base_amount_per_sec', im.max_level , im.max_amount_per_sec , im.base_exp_per_level
+	SELECT uc.id , uc.user_id , uc.card_id , uc.amount_per_sec , uc.level, uc.total_exp
 	FROM user_cards as uc
-	INNER JOIN item_masters as im ON uc.card_id = im.id
 	WHERE uc.id = ? AND uc.user_id=?
 	`
 	if err = h.DB.Get(card, query, cardID, userID); err != nil {
@@ -1754,6 +1756,15 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 			return errorResponse(c, http.StatusNotFound, err)
 		}
 		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	for _, im := range allItemMasters {
+		if card.CardID == im.ID {
+			card.BaseAmountPerSec = *im.AmountPerSec
+			card.MaxLevel = *im.MaxLevel
+			card.MaxAmountPerSec = *im.MaxAmountPerSec
+			card.BaseExpPerLevel = *im.BaseExpPerLevel
+			break
+		}
 	}
 
 	if card.Level == card.MaxLevel {
@@ -1763,9 +1774,8 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 	// 消費アイテムの所持チェック
 	items := make([]*ConsumeUserItemData, 0)
 	query = `
-	SELECT ui.id, ui.user_id, ui.item_id, ui.item_type, ui.amount, ui.created_at, ui.updated_at, im.gained_exp
+	SELECT ui.id, ui.user_id, ui.item_id, ui.item_type, ui.amount, ui.created_at, ui.updated_at
 	FROM user_items as ui
-	INNER JOIN item_masters as im ON ui.item_id = im.id
 	WHERE ui.item_type = 3 AND ui.id=? AND ui.user_id=?
 	`
 	for _, v := range req.Items {
@@ -1775,6 +1785,12 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 				return errorResponse(c, http.StatusNotFound, err)
 			}
 			return errorResponse(c, http.StatusInternalServerError, err)
+		}
+		for _, im := range allItemMasters {
+			if item.ItemID == im.ID {
+				item.GainedExp = *im.GainedExp
+				break
+			}
 		}
 
 		if v.Amount > item.Amount {
@@ -2450,6 +2466,9 @@ var (
 	masterVersions   []*VersionMaster
 	muMasterVersions sync.RWMutex
 
+	itemMasters   []*ItemMaster
+	muItemMasters sync.RWMutex
+
 	loginBonusMasters   []*LoginBonusMaster
 	muLoginBonusMasters sync.RWMutex
 
@@ -2465,6 +2484,14 @@ func resetMasterCache(dbx *sqlx.DB) error {
 		return err
 	}
 	masterVersions = allMasterVersions
+
+	muItemMasters.Lock()
+	defer muItemMasters.Unlock()
+	var allItemMasters []*ItemMaster
+	if err := dbx.Select(&allItemMasters, "SELECT * FROM item_masters"); err != nil {
+		return err
+	}
+	itemMasters = allItemMasters
 
 	muLoginBonusMasters.Lock()
 	defer muLoginBonusMasters.Unlock()
@@ -2495,6 +2522,18 @@ func cacheMasterVersions(masters []*VersionMaster) {
 	muMasterVersions.Lock()
 	defer muMasterVersions.Unlock()
 	masterVersions = append(masterVersions, masters...)
+}
+
+func getItemMasters() []*ItemMaster {
+	muItemMasters.RLock()
+	defer muItemMasters.RUnlock()
+	return itemMasters
+}
+
+func cacheItemMasters(masters []*ItemMaster) {
+	muItemMasters.Lock()
+	defer muItemMasters.Unlock()
+	itemMasters = append(itemMasters, masters...)
 }
 
 func getLoginBonusMasters() []*LoginBonusMaster {
