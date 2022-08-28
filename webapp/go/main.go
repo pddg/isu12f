@@ -105,7 +105,7 @@ func main() {
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{}))
 
 	// utility
-	e.POST("/initialize", initialize)
+	e.POST("/initialize", h.initialize)
 	e.GET("/health", h.health)
 
 	// feature
@@ -169,6 +169,22 @@ func (h *Handler) adminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
+func checkMasterVersion(xMasterVersion string) error {
+	masterMutex.RLock()
+	defer masterMutex.RUnlock()
+	var masterVersion *VersionMaster
+	for _, version := range masterCache.VersionMaster {
+		if version.Status == 1 {
+			masterVersion = version
+		}
+	}
+
+	if masterVersion.MasterVersion != xMasterVersion {
+		return ErrInvalidMasterVersion
+	}
+	return nil
+}
+
 // apiMiddleware
 func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
@@ -179,17 +195,8 @@ func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		c.Set("requestTime", requestAt.Unix())
 
 		// マスタ確認
-		query := "SELECT * FROM version_masters WHERE status=1"
-		masterVersion := new(VersionMaster)
-		if err := h.DB.Get(masterVersion, query); err != nil {
-			if err == sql.ErrNoRows {
-				return errorResponse(c, http.StatusNotFound, fmt.Errorf("active master version is not found"))
-			}
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
-
-		if masterVersion.MasterVersion != c.Request().Header.Get("x-master-version") {
-			return errorResponse(c, http.StatusUnprocessableEntity, ErrInvalidMasterVersion)
+		if err := checkMasterVersion(c.Request().Header.Get("x-master-version")); err != nil {
+			return errorResponse(c, http.StatusUnprocessableEntity, err)
 		}
 
 		// check ban
@@ -785,25 +792,10 @@ func (h *Handler) obtainItem(tx *sqlx.Tx, userID, itemID int64, itemType int, ob
 	}
 }
 
-func (h *Handler) obtainItems(tx *sqlx.Tx, items []*UserPresent, itemType int, requestAt int64) error {
-	switch itemType {
-	//case 1:
-	//	return h.updateUserCoins(tx, userID, obtainAmount)
-	case 2: // card(ハンマー)
-		return h.addUserCards(tx, items, requestAt)
-	case 3, 4: // 強化素材
-		//return h.updateItem(tx, userID, itemID, itemType, obtainAmount, requestAt)
-	default:
-		return ErrInvalidItemType
-	}
-	return nil
-}
-
 // initialize 初期化処理
 // POST /initialize
-func initialize(c echo.Context) error {
+func (h *Handler) initialize(c echo.Context) error {
 	rand.Seed(time.Now().UnixNano())
-
 	dbx, err := connectDB(true)
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -815,6 +807,13 @@ func initialize(c echo.Context) error {
 		c.Logger().Errorf("Failed to initialize %s: %v", string(out), err)
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
+	data, err := getMasterData(h.DB)
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	masterMutex.Lock()
+	masterCache = data
+	masterMutex.Unlock()
 
 	return successResponse(c, &InitializeResponse{
 		Language: "go",

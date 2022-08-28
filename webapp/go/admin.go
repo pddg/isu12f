@@ -7,9 +7,16 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/crypto/bcrypt"
+)
+
+var (
+	masterMutex sync.RWMutex
+	masterCache *AdminListMasterResponse
 )
 
 // //////////////////////////////////////
@@ -157,47 +164,42 @@ func (h *Handler) adminLogout(c echo.Context) error {
 	return noContentResponse(c, http.StatusNoContent)
 }
 
-// adminListMaster マスタデータ閲覧
-// GET /admin/master
-func (h *Handler) adminListMaster(c echo.Context) error {
+func getMasterData(db *sqlx.DB) (*AdminListMasterResponse, error) {
 	masterVersions := make([]*VersionMaster, 0)
-	if err := h.DB.Select(&masterVersions, "SELECT * FROM version_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	if err := db.Select(&masterVersions, "SELECT * FROM version_masters"); err != nil {
+		return nil, err
 	}
 
 	items := make([]*ItemMaster, 0)
-	if err := h.DB.Select(&items, "SELECT * FROM item_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	if err := db.Select(&items, "SELECT * FROM item_masters"); err != nil {
+		return nil, err
 	}
 
 	gachas := make([]*GachaMaster, 0)
-	if err := h.DB.Select(&gachas, "SELECT * FROM gacha_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	if err := db.Select(&gachas, "SELECT * FROM gacha_masters"); err != nil {
+		return nil, err
 	}
 
 	gachaItems := make([]*GachaItemMaster, 0)
-	if err := h.DB.Select(&gachaItems, "SELECT * FROM gacha_item_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	if err := db.Select(&gachaItems, "SELECT * FROM gacha_item_masters"); err != nil {
+		return nil, err
 	}
 
 	presentAlls := make([]*PresentAllMaster, 0)
-	if err := h.DB.Select(&presentAlls, "SELECT * FROM present_all_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-
+	if err := db.Select(&presentAlls, "SELECT * FROM present_all_masters"); err != nil {
+		return nil, err
 	}
 
 	loginBonuses := make([]*LoginBonusMaster, 0)
-	if err := h.DB.Select(&loginBonuses, "SELECT * FROM login_bonus_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-
+	if err := db.Select(&loginBonuses, "SELECT * FROM login_bonus_masters"); err != nil {
+		return nil, err
 	}
 
 	loginBonusRewards := make([]*LoginBonusRewardMaster, 0)
-	if err := h.DB.Select(&loginBonusRewards, "SELECT * FROM login_bonus_reward_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	if err := db.Select(&loginBonusRewards, "SELECT * FROM login_bonus_reward_masters"); err != nil {
+		return nil, err
 	}
-
-	return successResponse(c, &AdminListMasterResponse{
+	return &AdminListMasterResponse{
 		VersionMaster:     masterVersions,
 		Items:             items,
 		Gachas:            gachas,
@@ -205,7 +207,25 @@ func (h *Handler) adminListMaster(c echo.Context) error {
 		PresentAlls:       presentAlls,
 		LoginBonuses:      loginBonuses,
 		LoginBonusRewards: loginBonusRewards,
-	})
+	}, nil
+}
+
+// adminListMaster マスタデータ閲覧
+// GET /admin/master
+func (h *Handler) adminListMaster(c echo.Context) error {
+	if masterCache == nil {
+		resp, err := getMasterData(h.DB)
+		if err != nil {
+			return errorResponse(c, http.StatusInternalServerError, err)
+		}
+		masterMutex.Lock()
+		defer masterMutex.Unlock()
+		masterCache = resp
+		return successResponse(c, resp)
+	}
+	masterMutex.RLock()
+	defer masterMutex.RUnlock()
+	return successResponse(c, masterCache)
 }
 
 type AdminListMasterResponse struct {
@@ -482,10 +502,18 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
+	masterMutex.Lock()
+	defer masterMutex.Unlock()
 	err = tx.Commit()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
+
+	resp, err := getMasterData(h.DB)
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	masterCache = resp
 
 	return successResponse(c, &AdminUpdateMasterResponse{
 		VersionMaster: activeMaster,
