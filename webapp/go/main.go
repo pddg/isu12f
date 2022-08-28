@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -179,13 +180,15 @@ func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		c.Set("requestTime", requestAt.Unix())
 
 		// マスタ確認
-		query := "SELECT * FROM version_masters WHERE status=1"
-		masterVersion := new(VersionMaster)
-		if err := h.DB.Get(masterVersion, query); err != nil {
-			if err == sql.ErrNoRows {
-				return errorResponse(c, http.StatusNotFound, fmt.Errorf("active master version is not found"))
+		var masterVersion *VersionMaster
+		for _, mv := range getMasterVersions() {
+			if mv.Status == 1 {
+				masterVersion = mv
+				break
 			}
-			return errorResponse(c, http.StatusInternalServerError, err)
+		}
+		if masterVersion == nil {
+			return errorResponse(c, http.StatusNotFound, fmt.Errorf("active master version is not found"))
 		}
 
 		if masterVersion.MasterVersion != c.Request().Header.Get("x-master-version") {
@@ -375,9 +378,11 @@ func isCompleteTodayLogin(lastActivatedAt, requestAt time.Time) bool {
 func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) ([]*UserLoginBonus, error) {
 	// login bonus masterから有効なログインボーナスを取得
 	loginBonuses := make([]*LoginBonusMaster, 0)
-	query := "SELECT * FROM login_bonus_masters WHERE start_at <= ? AND end_at >= ?"
-	if err := tx.Select(&loginBonuses, query, requestAt, requestAt); err != nil {
-		return nil, err
+	for _, lb := range getLoginBonusMasters() {
+		if lb.StartAt > requestAt || lb.EndAt < requestAt {
+			continue
+		}
+		loginBonuses = append(loginBonuses, lb)
 	}
 
 	sendLoginBonuses := make([]*UserLoginBonus, 0)
@@ -386,7 +391,7 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) (
 		initBonus := false
 		// ボーナスの進捗取得
 		userBonus := new(UserLoginBonus)
-		query = "SELECT * FROM user_login_bonuses WHERE user_id=? AND login_bonus_id=?"
+		query := "SELECT * FROM user_login_bonuses WHERE user_id=? AND login_bonus_id=?"
 		if err := tx.Get(userBonus, query, userID, bonus.ID); err != nil {
 			if err != sql.ErrNoRows {
 				return nil, err
@@ -423,13 +428,15 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) (
 		userBonus.UpdatedAt = requestAt
 
 		// 今回付与するリソース取得
-		rewardItem := new(LoginBonusRewardMaster)
-		query = "SELECT * FROM login_bonus_reward_masters WHERE login_bonus_id=? AND reward_sequence=?"
-		if err := tx.Get(rewardItem, query, bonus.ID, userBonus.LastRewardSequence); err != nil {
-			if err == sql.ErrNoRows {
-				return nil, ErrLoginBonusRewardNotFound
+		var rewardItem *LoginBonusRewardMaster
+		for _, lb := range getLoginBonusRewardMasters() {
+			if lb.LoginBonusID == bonus.ID && lb.RewardSequence == userBonus.LastRewardSequence {
+				rewardItem = lb
+				break
 			}
-			return nil, err
+		}
+		if rewardItem == nil {
+			return nil, ErrLoginBonusRewardNotFound
 		}
 
 		err := h.obtainItem(tx, userID, rewardItem.ItemID, rewardItem.ItemType, rewardItem.Amount, requestAt)
@@ -459,9 +466,10 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) (
 // obtainPresent プレゼント付与処理
 func (h *Handler) obtainPresent(tx *sqlx.Tx, userID int64, requestAt int64) ([]*UserPresent, error) {
 	normalPresents := make([]*PresentAllMaster, 0)
-	query := "SELECT * FROM present_all_masters WHERE registered_start_at <= ? AND registered_end_at >= ?"
-	if err := tx.Select(&normalPresents, query, requestAt, requestAt); err != nil {
-		return nil, err
+	for _, pm := range getPresentAllMasters() {
+		if pm.RegisteredStartAt <= requestAt && pm.RegisteredEndAt >= requestAt {
+			normalPresents = append(normalPresents, pm)
+		}
 	}
 
 	// 全員プレゼント取得情報更新
@@ -565,13 +573,15 @@ func (h *Handler) updateUserCoins(tx *sqlx.Tx, userID int64, obtainAmount int64)
 }
 
 func (h *Handler) addUserCard(tx *sqlx.Tx, userID, itemID int64, itemType int, requestAt int64) error {
-	query := "SELECT * FROM item_masters WHERE id=? AND item_type=?"
 	item := new(ItemMaster)
-	if err := tx.Get(item, query, itemID, itemType); err != nil {
-		if err == sql.ErrNoRows {
-			return ErrItemNotFound
+	for _, im := range getItemMasters() {
+		if im.ID == itemID && im.ItemType == itemType {
+			item = im
+			break
 		}
-		return err
+	}
+	if item == nil {
+		return ErrItemNotFound
 	}
 
 	cID, err := h.generateID()
@@ -588,7 +598,7 @@ func (h *Handler) addUserCard(tx *sqlx.Tx, userID, itemID int64, itemType int, r
 		CreatedAt:    requestAt,
 		UpdatedAt:    requestAt,
 	}
-	query = "INSERT INTO user_cards(id, user_id, card_id, amount_per_sec, level, total_exp, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+	query := "INSERT INTO user_cards(id, user_id, card_id, amount_per_sec, level, total_exp, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 	if _, err := tx.Exec(query, card.ID, card.UserID, card.CardID, card.AmountPerSec, card.Level, card.TotalExp, card.CreatedAt, card.UpdatedAt); err != nil {
 		return err
 	}
@@ -599,20 +609,18 @@ func (h *Handler) addUserCards(tx *sqlx.Tx, items []*UserPresent, requestAt int6
 	itemType := 2
 
 	itemIDItemMaster := make(map[int64]*ItemMaster)
+	allItemMasters := getItemMasters()
 	for _, item := range items {
-		if itemIDItemMaster[item.ItemID] != nil {
-			continue
-		}
-
-		query := "SELECT * FROM item_masters WHERE id=? AND item_type=?"
-		i := new(ItemMaster)
-		if err := tx.Get(i, query, item.ItemID, itemType); err != nil {
-			if err == sql.ErrNoRows {
-				return ErrItemNotFound
+		found := false
+		for _, im := range allItemMasters {
+			if im.ID == item.ItemID && im.ItemType == itemType {
+				itemIDItemMaster[item.ItemID] = im
+				found = true
+				break
 			}
-			return err
-		} else {
-			itemIDItemMaster[item.ItemID] = i
+		}
+		if !found {
+			return ErrItemNotFound
 		}
 	}
 
@@ -645,16 +653,19 @@ func (h *Handler) addUserCards(tx *sqlx.Tx, items []*UserPresent, requestAt int6
 }
 
 func (h *Handler) updateItem(tx *sqlx.Tx, userID, itemID int64, itemType int, obtainAmount int64, requestAt int64) error {
-	query := "SELECT * FROM item_masters WHERE id=? AND item_type=?"
 	item := new(ItemMaster)
-	if err := tx.Get(item, query, itemID, itemType); err != nil {
-		if err == sql.ErrNoRows {
-			return ErrItemNotFound
+	for _, im := range getItemMasters() {
+		if im.ID == itemID && im.ItemType == itemType {
+			item = im
+			break
 		}
-		return err
 	}
+	if item == nil {
+		return ErrItemNotFound
+	}
+
 	// 所持数取得
-	query = "SELECT * FROM user_items WHERE user_id=? AND item_id=?"
+	query := "SELECT * FROM user_items WHERE user_id=? AND item_id=?"
 	uitem := new(UserItem)
 	if err := tx.Get(uitem, query, userID, item.ID); err != nil {
 		if err != sql.ErrNoRows {
@@ -694,17 +705,13 @@ func (h *Handler) updateItem(tx *sqlx.Tx, userID, itemID int64, itemType int, ob
 
 func (h *Handler) updateItems(tx *sqlx.Tx, presents []*UserPresent, requestAt int64) error {
 	var itemMasters []*ItemMaster
-	args := make([]interface{}, 0, len(presents)*2)
-	for _, p := range presents {
-		args = append(args, p.ItemID, p.ItemType)
-	}
-	conds := make([]string, 0, len(presents))
-	for i := 0; i < len(presents); i++ {
-		conds = append(conds, "(id = ? AND item_type = ?)")
-	}
-	query := "SELECT * FROM item_masters WHERE " + strings.Join(conds, " OR ")
-	if err := tx.Select(&itemMasters, query, args...); err != nil {
-		return err
+	for _, im := range getItemMasters() {
+		for _, p := range presents {
+			if im.ID == p.ItemID && im.ItemType == p.ItemType {
+				itemMasters = append(itemMasters, im)
+				break
+			}
+		}
 	}
 
 	itemIDItemMaster := make(map[int64]*ItemMaster)
@@ -713,17 +720,17 @@ func (h *Handler) updateItems(tx *sqlx.Tx, presents []*UserPresent, requestAt in
 		itemIDItemMaster[im.ID] = im
 	}
 
-	args = make([]interface{}, 0, len(presents)*2)
+	args := make([]interface{}, 0, len(presents)*2)
 	for _, p := range presents {
 		args = append(args, p.UserID, p.ItemID)
 	}
 
 	var userItems []*UserItem
-	conds = make([]string, 0, len(presents))
+	conds := make([]string, 0, len(presents))
 	for i := 0; i < len(presents); i++ {
 		conds = append(conds, "(user_id = ? AND item_id = ?)")
 	}
-	query = "SELECT * FROM user_items WHERE " + strings.Join(conds, " OR ")
+	query := "SELECT * FROM user_items WHERE " + strings.Join(conds, " OR ")
 	if err := tx.Select(&userItems, query, args...); err != nil {
 		return err
 	}
@@ -816,6 +823,11 @@ func initialize(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
+	if err := resetMasterCache(dbx); err != nil {
+		c.Logger().Errorf("Failed to reset master cache: %v", err)
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+
 	return successResponse(c, &InitializeResponse{
 		Language: "go",
 	})
@@ -889,12 +901,14 @@ func (h *Handler) createUser(c echo.Context) error {
 
 	// 初期デッキ付与
 	initCard := new(ItemMaster)
-	query = "SELECT * FROM item_masters WHERE id=?"
-	if err = tx.Get(initCard, query, 2); err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusNotFound, ErrItemNotFound)
+	for _, im := range getItemMasters() {
+		if im.ID == 2 {
+			initCard = im
+			break
 		}
-		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	if initCard == nil {
+		return errorResponse(c, http.StatusNotFound, ErrItemNotFound)
 	}
 
 	initCards := make([]*UserCard, 0, 3)
@@ -1142,11 +1156,14 @@ func (h *Handler) listGacha(c echo.Context) error {
 	}
 
 	gachaMasterList := []*GachaMaster{}
-	query := "SELECT * FROM gacha_masters WHERE start_at <= ? AND end_at >= ? ORDER BY display_order ASC"
-	err = h.DB.Select(&gachaMasterList, query, requestAt, requestAt)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	for _, gm := range getGachaMasters() {
+		if gm.StartAt <= requestAt && gm.EndAt >= requestAt {
+			gachaMasterList = append(gachaMasterList, gm)
+		}
 	}
+	sort.Slice(gachaMasterList, func(i, j int) bool {
+		return gachaMasterList[i].DisplayOrder < gachaMasterList[j].DisplayOrder
+	})
 
 	if len(gachaMasterList) == 0 {
 		return successResponse(c, &ListGachaResponse{
@@ -1156,16 +1173,12 @@ func (h *Handler) listGacha(c echo.Context) error {
 
 	// ガチャ排出アイテム取得
 	var gachaItemMasters []*GachaItemMaster
-	gachaIDs := make([]int64, 0, len(gachaMasterList))
-	for _, gm := range gachaMasterList {
-		gachaIDs = append(gachaIDs, gm.ID)
-	}
-	query, args, err := sqlx.In("SELECT * FROM gacha_item_masters WHERE gacha_id IN (?)", gachaIDs)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	if err := h.DB.Select(&gachaItemMasters, query, args...); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	for _, gim := range getGachaItemMasters() {
+		for _, g := range gachaMasterList {
+			if g.ID == gim.GachaID {
+				gachaItemMasters = append(gachaItemMasters, gim)
+			}
+		}
 	}
 
 	gachaDataList := make([]*GachaData, 0)
@@ -1192,7 +1205,7 @@ func (h *Handler) listGacha(c echo.Context) error {
 	}
 
 	// genearte one time token
-	query = "UPDATE user_one_time_tokens SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
+	query := "UPDATE user_one_time_tokens SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
 	if _, err = h.DB.Exec(query, requestAt, userID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -1296,33 +1309,35 @@ func (h *Handler) drawGacha(c echo.Context) error {
 	}
 
 	// gachaIDからガチャマスタの取得
-	query = "SELECT * FROM gacha_masters WHERE id=? AND start_at <= ? AND end_at >= ?"
 	gachaInfo := new(GachaMaster)
-	if err = h.DB.Get(gachaInfo, query, gachaID, requestAt, requestAt); err != nil {
-		if sql.ErrNoRows == err {
-			return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha"))
+	for _, gm := range getGachaMasters() {
+		if fmt.Sprintf("%d", gm.ID) == gachaID && gm.StartAt <= requestAt && gm.EndAt >= requestAt {
+			gachaInfo = gm
+			break
 		}
-		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	if gachaInfo == nil {
+		return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha"))
 	}
 
 	// gachaItemMasterからアイテムリスト取得
 	gachaItemList := make([]*GachaItemMaster, 0)
-	err = h.DB.Select(&gachaItemList, "SELECT * FROM gacha_item_masters WHERE gacha_id=? ORDER BY id ASC", gachaID)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	for _, gim := range getGachaItemMasters() {
+		if gim.GachaID == gachaInfo.ID {
+			gachaItemList = append(gachaItemList, gim)
+		}
 	}
+	sort.Slice(gachaItemList, func(i, j int) bool {
+		return gachaItemList[i].ID < gachaItemList[j].ID
+	})
 	if len(gachaItemList) == 0 {
 		return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item"))
 	}
 
 	// weightの合計値を算出
 	var sum int64
-	err = h.DB.Get(&sum, "SELECT SUM(weight) FROM gacha_item_masters WHERE gacha_id=?", gachaID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusNotFound, err)
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
+	for _, gim := range gachaItemList {
+		sum += int64(gim.Weight)
 	}
 
 	// random値の導出 & 抽選
@@ -1730,11 +1745,12 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 	}
 
 	// get target card
+	allItemMasters := getItemMasters()
+
 	card := new(TargetUserCardData)
 	query := `
-	SELECT uc.id , uc.user_id , uc.card_id , uc.amount_per_sec , uc.level, uc.total_exp, im.amount_per_sec as 'base_amount_per_sec', im.max_level , im.max_amount_per_sec , im.base_exp_per_level
+	SELECT uc.id , uc.user_id , uc.card_id , uc.amount_per_sec , uc.level, uc.total_exp
 	FROM user_cards as uc
-	INNER JOIN item_masters as im ON uc.card_id = im.id
 	WHERE uc.id = ? AND uc.user_id=?
 	`
 	if err = h.DB.Get(card, query, cardID, userID); err != nil {
@@ -1742,6 +1758,15 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 			return errorResponse(c, http.StatusNotFound, err)
 		}
 		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	for _, im := range allItemMasters {
+		if card.CardID == im.ID {
+			card.BaseAmountPerSec = *im.AmountPerSec
+			card.MaxLevel = *im.MaxLevel
+			card.MaxAmountPerSec = *im.MaxAmountPerSec
+			card.BaseExpPerLevel = *im.BaseExpPerLevel
+			break
+		}
 	}
 
 	if card.Level == card.MaxLevel {
@@ -1751,9 +1776,8 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 	// 消費アイテムの所持チェック
 	items := make([]*ConsumeUserItemData, 0)
 	query = `
-	SELECT ui.id, ui.user_id, ui.item_id, ui.item_type, ui.amount, ui.created_at, ui.updated_at, im.gained_exp
+	SELECT ui.id, ui.user_id, ui.item_id, ui.item_type, ui.amount, ui.created_at, ui.updated_at
 	FROM user_items as ui
-	INNER JOIN item_masters as im ON ui.item_id = im.id
 	WHERE ui.item_type = 3 AND ui.id=? AND ui.user_id=?
 	`
 	for _, v := range req.Items {
@@ -1763,6 +1787,12 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 				return errorResponse(c, http.StatusNotFound, err)
 			}
 			return errorResponse(c, http.StatusInternalServerError, err)
+		}
+		for _, im := range allItemMasters {
+			if item.ItemID == im.ID {
+				item.GainedExp = *im.GainedExp
+				break
+			}
 		}
 
 		if v.Amount > item.Amount {
@@ -2431,4 +2461,173 @@ type VersionMaster struct {
 	ID            int64  `json:"id" db:"id"`
 	Status        int    `json:"status" db:"status"`
 	MasterVersion string `json:"masterVersion" db:"master_version"`
+}
+
+// Cache
+// TODO: 重複時の更新について考える
+var (
+	masterVersions   []*VersionMaster
+	muMasterVersions sync.RWMutex
+
+	itemMasters   []*ItemMaster
+	muItemMasters sync.RWMutex
+
+	gachaMasters   []*GachaMaster
+	muGachaMasters sync.RWMutex
+
+	gachaItemMasters   []*GachaItemMaster
+	muGachaItemMasters sync.RWMutex
+
+	presentAllMasters   []*PresentAllMaster
+	muPresentAllMasters sync.RWMutex
+
+	loginBonusMasters   []*LoginBonusMaster
+	muLoginBonusMasters sync.RWMutex
+
+	loginBonusRewardMasters   []*LoginBonusRewardMaster
+	muLoginBonusRewardMasters sync.RWMutex
+)
+
+func resetMasterCache(dbx *sqlx.DB) error {
+	muMasterVersions.Lock()
+	defer muMasterVersions.Unlock()
+	var allMasterVersions []*VersionMaster
+	if err := dbx.Select(&allMasterVersions, "SELECT * FROM version_masters"); err != nil {
+		return err
+	}
+	masterVersions = allMasterVersions
+
+	muItemMasters.Lock()
+	defer muItemMasters.Unlock()
+	var allItemMasters []*ItemMaster
+	if err := dbx.Select(&allItemMasters, "SELECT * FROM item_masters"); err != nil {
+		return err
+	}
+	itemMasters = allItemMasters
+
+	muGachaMasters.Lock()
+	defer muGachaMasters.Unlock()
+	var allGachaMasters []*GachaMaster
+	if err := dbx.Select(&allGachaMasters, "SELECT * FROM gacha_masters"); err != nil {
+		return err
+	}
+	gachaMasters = allGachaMasters
+
+	muGachaItemMasters.Lock()
+	defer muGachaItemMasters.Unlock()
+	var allGachaItemMasters []*GachaItemMaster
+	if err := dbx.Select(&allGachaItemMasters, "SELECT * FROM gacha_item_masters"); err != nil {
+		return err
+	}
+	gachaItemMasters = allGachaItemMasters
+
+	muPresentAllMasters.Lock()
+	defer muPresentAllMasters.Unlock()
+	var allPresentAllMasters []*PresentAllMaster
+	if err := dbx.Select(&allPresentAllMasters, "SELECT * FROM present_all_masters"); err != nil {
+		return err
+	}
+	presentAllMasters = allPresentAllMasters
+
+	muLoginBonusMasters.Lock()
+	defer muLoginBonusMasters.Unlock()
+	var allLoginBonusMasters []*LoginBonusMaster
+	if err := dbx.Select(&allLoginBonusMasters, "SELECT * FROM login_bonus_masters"); err != nil {
+		return err
+	}
+	loginBonusMasters = allLoginBonusMasters
+
+	muLoginBonusRewardMasters.Lock()
+	defer muLoginBonusRewardMasters.Unlock()
+	var allLoginBonusRewardMasters []*LoginBonusRewardMaster
+	if err := dbx.Select(&allLoginBonusRewardMasters, "SELECT * FROM login_bonus_reward_masters"); err != nil {
+		return err
+	}
+	loginBonusRewardMasters = allLoginBonusRewardMasters
+
+	return nil
+}
+
+func getMasterVersions() []*VersionMaster {
+	muMasterVersions.RLock()
+	defer muMasterVersions.RUnlock()
+	return masterVersions
+}
+
+func cacheMasterVersions(masters []*VersionMaster) {
+	muMasterVersions.Lock()
+	defer muMasterVersions.Unlock()
+	masterVersions = append(masterVersions, masters...)
+}
+
+func getItemMasters() []*ItemMaster {
+	muItemMasters.RLock()
+	defer muItemMasters.RUnlock()
+	return itemMasters
+}
+
+func cacheItemMasters(masters []*ItemMaster) {
+	muItemMasters.Lock()
+	defer muItemMasters.Unlock()
+	itemMasters = append(itemMasters, masters...)
+}
+
+func getGachaMasters() []*GachaMaster {
+	muGachaMasters.RLock()
+	defer muGachaMasters.RUnlock()
+	return gachaMasters
+}
+
+func cacheGachaMasters(masters []*GachaMaster) {
+	muGachaMasters.Lock()
+	defer muGachaMasters.Unlock()
+	gachaMasters = append(gachaMasters, masters...)
+}
+
+func getGachaItemMasters() []*GachaItemMaster {
+	muGachaItemMasters.RLock()
+	defer muGachaItemMasters.RUnlock()
+	return gachaItemMasters
+}
+
+func cacheGachaItemMasters(masters []*GachaItemMaster) {
+	muGachaItemMasters.Lock()
+	defer muGachaItemMasters.Unlock()
+	gachaItemMasters = append(gachaItemMasters, masters...)
+}
+
+func getPresentAllMasters() []*PresentAllMaster {
+	muPresentAllMasters.RLock()
+	defer muPresentAllMasters.RUnlock()
+	return presentAllMasters
+}
+
+func cachePresentAllMasters(masters []*PresentAllMaster) {
+	muPresentAllMasters.Lock()
+	defer muPresentAllMasters.Unlock()
+	presentAllMasters = append(presentAllMasters, masters...)
+}
+
+func getLoginBonusMasters() []*LoginBonusMaster {
+	muLoginBonusMasters.RLock()
+	defer muLoginBonusMasters.RUnlock()
+	return loginBonusMasters
+}
+
+func cacheLoginBonusMasters(masters []*LoginBonusMaster) {
+	muLoginBonusMasters.Lock()
+	defer muLoginBonusMasters.Unlock()
+	loginBonusMasters = append(loginBonusMasters, masters...)
+}
+
+func getLoginBonusRewardMasters() []*LoginBonusRewardMaster {
+	muLoginBonusRewardMasters.RLock()
+	defer muLoginBonusRewardMasters.RUnlock()
+	return loginBonusRewardMasters
+}
+
+func cacheLoginBonusRewardMasters(masters []*LoginBonusRewardMaster) {
+	muLoginBonusRewardMasters.Lock()
+	defer muLoginBonusRewardMasters.Unlock()
+	loginBonusRewardMasters = append(loginBonusRewardMasters, masters...)
 }
