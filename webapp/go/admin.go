@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/csv"
+	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -160,10 +162,7 @@ func (h *Handler) adminLogout(c echo.Context) error {
 // adminListMaster マスタデータ閲覧
 // GET /admin/master
 func (h *Handler) adminListMaster(c echo.Context) error {
-	masterVersions := make([]*VersionMaster, 0)
-	if err := h.DB.Select(&masterVersions, "SELECT * FROM version_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	masterVersions := getMasterVersions()
 
 	items := make([]*ItemMaster, 0)
 	if err := h.DB.Select(&items, "SELECT * FROM item_masters"); err != nil {
@@ -186,16 +185,9 @@ func (h *Handler) adminListMaster(c echo.Context) error {
 
 	}
 
-	loginBonuses := make([]*LoginBonusMaster, 0)
-	if err := h.DB.Select(&loginBonuses, "SELECT * FROM login_bonus_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	loginBonuses := getLoginBonusMasters()
 
-	}
-
-	loginBonusRewards := make([]*LoginBonusRewardMaster, 0)
-	if err := h.DB.Select(&loginBonusRewards, "SELECT * FROM login_bonus_reward_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	loginBonusRewards := getLoginBonusRewardMasters()
 
 	return successResponse(c, &AdminListMasterResponse{
 		VersionMaster:     masterVersions,
@@ -235,22 +227,28 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 	if versionMasterRecs != nil {
-		data := []map[string]interface{}{}
+		masterVersions := make([]*VersionMaster, 0, len(versionMasterRecs))
 		for i, v := range versionMasterRecs {
 			if i == 0 {
 				continue
 			}
-			data = append(data, map[string]interface{}{
-				"id":             v[0],
-				"status":         v[1],
-				"master_version": v[2],
+			id, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			status, err := strconv.ParseInt(v[1], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+
+			masterVersions = append(masterVersions, &VersionMaster{
+				ID:            id,
+				Status:        int(status),
+				MasterVersion: v[2],
 			})
 		}
 
-		query := "INSERT INTO version_masters(id, status, master_version) VALUES (:id, :status, :master_version) ON DUPLICATE KEY UPDATE status=VALUES(status), master_version=VALUES(master_version)"
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		cacheMasterVersions(masterVersions)
 	} else {
 		c.Logger().Debug("Skip Update Master: versionMaster")
 	}
@@ -410,33 +408,47 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 	if loginBonusRecs != nil {
-		data := []map[string]interface{}{}
+		loginBonusMasters := make([]*LoginBonusMaster, 0, len(loginBonusRecs))
 		for i, v := range loginBonusRecs {
 			if i == 0 {
 				continue
 			}
-			looped := 0
+			looped := false
 			if v[4] == "TRUE" {
-				looped = 1
+				looped = true
 			}
-			data = append(data, map[string]interface{}{
-				"id":           v[0],
-				"start_at":     v[1],
-				"end_at":       v[2],
-				"column_count": v[3],
-				"looped":       looped,
-				"created_at":   v[5],
+			id, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			startAt, err := strconv.ParseInt(v[1], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			endAt, err := strconv.ParseInt(v[2], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			columnCount, err := strconv.Atoi(v[3])
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			createdAt, err := strconv.ParseInt(v[5], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+
+			loginBonusMasters = append(loginBonusMasters, &LoginBonusMaster{
+				ID:          id,
+				StartAt:     startAt,
+				EndAt:       endAt,
+				ColumnCount: columnCount,
+				Looped:      looped,
+				CreatedAt:   createdAt,
 			})
 		}
 
-		query := strings.Join([]string{
-			"INSERT INTO login_bonus_masters(id, start_at, end_at, column_count, looped, created_at)",
-			"VALUES (:id, :start_at, :end_at, :column_count, :looped, :created_at)",
-			"ON DUPLICATE KEY UPDATE start_at=VALUES(start_at), end_at=VALUES(end_at), column_count=VALUES(column_count), looped=VALUES(looped), created_at=VALUES(created_at)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		cacheLoginBonusMasters(loginBonusMasters)
 	} else {
 		c.Logger().Debug("Skip Update Master: loginBonusMaster")
 	}
@@ -449,37 +461,67 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 	if loginBonusRewardRecs != nil {
-		data := []map[string]interface{}{}
+		loginBonusRewardMasters := make([]*LoginBonusRewardMaster, 0, len(loginBonusRewardRecs))
 		for i, v := range loginBonusRewardRecs {
 			if i == 0 {
 				continue
 			}
-			data = append(data, map[string]interface{}{
-				"id":              v[0],
-				"login_bonus_id":  v[1],
-				"reward_sequence": v[2],
-				"item_type":       v[3],
-				"item_id":         v[4],
-				"amount":          v[5],
-				"created_at":      v[6],
+			id, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			loginBonusID, err := strconv.ParseInt(v[1], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			rewardSequence, err := strconv.ParseInt(v[2], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			itemType, err := strconv.ParseInt(v[3], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			itemID, err := strconv.ParseInt(v[4], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			amount, err := strconv.ParseInt(v[5], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			createdAt, err := strconv.ParseInt(v[6], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+
+			loginBonusRewardMasters = append(loginBonusRewardMasters, &LoginBonusRewardMaster{
+				ID:             id,
+				LoginBonusID:   loginBonusID,
+				RewardSequence: int(rewardSequence),
+				ItemType:       int(itemType),
+				ItemID:         itemID,
+				Amount:         amount,
+				CreatedAt:      createdAt,
 			})
 		}
 
-		query := strings.Join([]string{
-			"INSERT INTO login_bonus_reward_masters(id, login_bonus_id, reward_sequence, item_type, item_id, amount, created_at)",
-			"VALUES (:id, :login_bonus_id, :reward_sequence, :item_type, :item_id, :amount, :created_at)",
-			"ON DUPLICATE KEY UPDATE login_bonus_id=VALUES(login_bonus_id), reward_sequence=VALUES(reward_sequence), item_type=VALUES(item_type), item_id=VALUES(item_id), amount=VALUES(amount), created_at=VALUES(created_at)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		cacheLoginBonusRewardMasters(loginBonusRewardMasters)
+
 	} else {
 		c.Logger().Debug("Skip Update Master: loginBonusRewardMaster")
 	}
 
-	activeMaster := new(VersionMaster)
-	if err = tx.Get(activeMaster, "SELECT * FROM version_masters WHERE status=1"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	//activeMaster := new(VersionMaster)
+	var activeMaster *VersionMaster
+	for _, mv := range getMasterVersions() {
+		if mv.Status == 1 {
+			activeMaster = mv
+			break
+		}
+	}
+	if activeMaster == nil {
+		return errorResponse(c, http.StatusInternalServerError, errors.New("active master not found"))
 	}
 
 	err = tx.Commit()

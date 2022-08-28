@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -179,13 +180,15 @@ func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		c.Set("requestTime", requestAt.Unix())
 
 		// マスタ確認
-		query := "SELECT * FROM version_masters WHERE status=1"
-		masterVersion := new(VersionMaster)
-		if err := h.DB.Get(masterVersion, query); err != nil {
-			if err == sql.ErrNoRows {
-				return errorResponse(c, http.StatusNotFound, fmt.Errorf("active master version is not found"))
+		var masterVersion *VersionMaster
+		for _, mv := range getMasterVersions() {
+			if mv.Status == 1 {
+				masterVersion = mv
+				break
 			}
-			return errorResponse(c, http.StatusInternalServerError, err)
+		}
+		if masterVersion == nil {
+			return errorResponse(c, http.StatusNotFound, fmt.Errorf("active master version is not found"))
 		}
 
 		if masterVersion.MasterVersion != c.Request().Header.Get("x-master-version") {
@@ -375,9 +378,11 @@ func isCompleteTodayLogin(lastActivatedAt, requestAt time.Time) bool {
 func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) ([]*UserLoginBonus, error) {
 	// login bonus masterから有効なログインボーナスを取得
 	loginBonuses := make([]*LoginBonusMaster, 0)
-	query := "SELECT * FROM login_bonus_masters WHERE start_at <= ? AND end_at >= ?"
-	if err := tx.Select(&loginBonuses, query, requestAt, requestAt); err != nil {
-		return nil, err
+	for _, lb := range getLoginBonusMasters() {
+		if lb.StartAt > requestAt || lb.EndAt < requestAt {
+			continue
+		}
+		loginBonuses = append(loginBonuses, lb)
 	}
 
 	sendLoginBonuses := make([]*UserLoginBonus, 0)
@@ -386,7 +391,7 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) (
 		initBonus := false
 		// ボーナスの進捗取得
 		userBonus := new(UserLoginBonus)
-		query = "SELECT * FROM user_login_bonuses WHERE user_id=? AND login_bonus_id=?"
+		query := "SELECT * FROM user_login_bonuses WHERE user_id=? AND login_bonus_id=?"
 		if err := tx.Get(userBonus, query, userID, bonus.ID); err != nil {
 			if err != sql.ErrNoRows {
 				return nil, err
@@ -423,13 +428,15 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) (
 		userBonus.UpdatedAt = requestAt
 
 		// 今回付与するリソース取得
-		rewardItem := new(LoginBonusRewardMaster)
-		query = "SELECT * FROM login_bonus_reward_masters WHERE login_bonus_id=? AND reward_sequence=?"
-		if err := tx.Get(rewardItem, query, bonus.ID, userBonus.LastRewardSequence); err != nil {
-			if err == sql.ErrNoRows {
-				return nil, ErrLoginBonusRewardNotFound
+		var rewardItem *LoginBonusRewardMaster
+		for _, lb := range getLoginBonusRewardMasters() {
+			if lb.LoginBonusID == bonus.ID && lb.RewardSequence == userBonus.LastRewardSequence {
+				rewardItem = lb
+				break
 			}
-			return nil, err
+		}
+		if rewardItem == nil {
+			return nil, ErrLoginBonusRewardNotFound
 		}
 
 		err := h.obtainItem(tx, userID, rewardItem.ItemID, rewardItem.ItemType, rewardItem.Amount, requestAt)
@@ -813,6 +820,11 @@ func initialize(c echo.Context) error {
 	out, err := exec.Command("/bin/sh", "-c", SQLDirectory+"init.sh").CombinedOutput()
 	if err != nil {
 		c.Logger().Errorf("Failed to initialize %s: %v", string(out), err)
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+
+	if err := resetMasterCache(dbx); err != nil {
+		c.Logger().Errorf("Failed to reset master cache: %v", err)
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
@@ -2431,4 +2443,80 @@ type VersionMaster struct {
 	ID            int64  `json:"id" db:"id"`
 	Status        int    `json:"status" db:"status"`
 	MasterVersion string `json:"masterVersion" db:"master_version"`
+}
+
+// Cache
+var (
+	masterVersions   []*VersionMaster
+	muMasterVersions sync.RWMutex
+
+	loginBonusMasters   []*LoginBonusMaster
+	muLoginBonusMasters sync.RWMutex
+
+	loginBonusRewardMasters   []*LoginBonusRewardMaster
+	muLoginBonusRewardMasters sync.RWMutex
+)
+
+func resetMasterCache(dbx *sqlx.DB) error {
+	muMasterVersions.Lock()
+	defer muMasterVersions.Unlock()
+	var allMasterVersions []*VersionMaster
+	if err := dbx.Select(&allMasterVersions, "SELECT * FROM version_masters"); err != nil {
+		return err
+	}
+	masterVersions = allMasterVersions
+
+	muLoginBonusMasters.Lock()
+	defer muLoginBonusMasters.Unlock()
+	var allLoginBonusMasters []*LoginBonusMaster
+	if err := dbx.Select(&allLoginBonusMasters, "SELECT * FROM login_bonus_masters"); err != nil {
+		return err
+	}
+	loginBonusMasters = allLoginBonusMasters
+
+	muLoginBonusRewardMasters.Lock()
+	defer muLoginBonusRewardMasters.Unlock()
+	var allLoginBonusRewardMasters []*LoginBonusRewardMaster
+	if err := dbx.Select(&allLoginBonusRewardMasters, "SELECT * FROM login_bonus_reward_masters"); err != nil {
+		return err
+	}
+	loginBonusRewardMasters = allLoginBonusRewardMasters
+
+	return nil
+}
+
+func getMasterVersions() []*VersionMaster {
+	muMasterVersions.RLock()
+	defer muMasterVersions.RUnlock()
+	return masterVersions
+}
+
+func cacheMasterVersions(masters []*VersionMaster) {
+	muMasterVersions.Lock()
+	defer muMasterVersions.Unlock()
+	masterVersions = append(masterVersions, masters...)
+}
+
+func getLoginBonusMasters() []*LoginBonusMaster {
+	muLoginBonusMasters.RLock()
+	defer muLoginBonusMasters.RUnlock()
+	return loginBonusMasters
+}
+
+func cacheLoginBonusMasters(masters []*LoginBonusMaster) {
+	muLoginBonusMasters.Lock()
+	defer muLoginBonusMasters.Unlock()
+	loginBonusMasters = append(loginBonusMasters, masters...)
+}
+
+func getLoginBonusRewardMasters() []*LoginBonusRewardMaster {
+	muLoginBonusRewardMasters.RLock()
+	defer muLoginBonusRewardMasters.RUnlock()
+	return loginBonusRewardMasters
+}
+
+func cacheLoginBonusRewardMasters(masters []*LoginBonusRewardMaster) {
+	muLoginBonusRewardMasters.Lock()
+	defer muLoginBonusRewardMasters.Unlock()
+	loginBonusRewardMasters = append(loginBonusRewardMasters, masters...)
 }
