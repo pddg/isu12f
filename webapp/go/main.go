@@ -466,9 +466,10 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) (
 // obtainPresent プレゼント付与処理
 func (h *Handler) obtainPresent(tx *sqlx.Tx, userID int64, requestAt int64) ([]*UserPresent, error) {
 	normalPresents := make([]*PresentAllMaster, 0)
-	query := "SELECT * FROM present_all_masters WHERE registered_start_at <= ? AND registered_end_at >= ?"
-	if err := tx.Select(&normalPresents, query, requestAt, requestAt); err != nil {
-		return nil, err
+	for _, pm := range getPresentAllMasters() {
+		if pm.RegisteredStartAt <= requestAt && pm.RegisteredEndAt >= requestAt {
+			normalPresents = append(normalPresents, pm)
+		}
 	}
 
 	// 全員プレゼント取得情報更新
@@ -1155,11 +1156,14 @@ func (h *Handler) listGacha(c echo.Context) error {
 	}
 
 	gachaMasterList := []*GachaMaster{}
-	query := "SELECT * FROM gacha_masters WHERE start_at <= ? AND end_at >= ? ORDER BY display_order ASC"
-	err = h.DB.Select(&gachaMasterList, query, requestAt, requestAt)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	for _, gm := range getGachaMasters() {
+		if gm.StartAt <= requestAt && gm.EndAt >= requestAt {
+			gachaMasterList = append(gachaMasterList, gm)
+		}
 	}
+	sort.Slice(gachaMasterList, func(i, j int) bool {
+		return gachaMasterList[i].DisplayOrder < gachaMasterList[j].DisplayOrder
+	})
 
 	if len(gachaMasterList) == 0 {
 		return successResponse(c, &ListGachaResponse{
@@ -1169,16 +1173,12 @@ func (h *Handler) listGacha(c echo.Context) error {
 
 	// ガチャ排出アイテム取得
 	var gachaItemMasters []*GachaItemMaster
-	gachaIDs := make([]int64, 0, len(gachaMasterList))
-	for _, gm := range gachaMasterList {
-		gachaIDs = append(gachaIDs, gm.ID)
-	}
-	query, args, err := sqlx.In("SELECT * FROM gacha_item_masters WHERE gacha_id IN (?)", gachaIDs)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	if err := h.DB.Select(&gachaItemMasters, query, args...); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	for _, gim := range getGachaItemMasters() {
+		for _, g := range gachaMasterList {
+			if g.ID == gim.GachaID {
+				gachaItemMasters = append(gachaItemMasters, gim)
+			}
+		}
 	}
 
 	gachaDataList := make([]*GachaData, 0)
@@ -1205,7 +1205,7 @@ func (h *Handler) listGacha(c echo.Context) error {
 	}
 
 	// genearte one time token
-	query = "UPDATE user_one_time_tokens SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
+	query := "UPDATE user_one_time_tokens SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
 	if _, err = h.DB.Exec(query, requestAt, userID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -1309,33 +1309,35 @@ func (h *Handler) drawGacha(c echo.Context) error {
 	}
 
 	// gachaIDからガチャマスタの取得
-	query = "SELECT * FROM gacha_masters WHERE id=? AND start_at <= ? AND end_at >= ?"
 	gachaInfo := new(GachaMaster)
-	if err = h.DB.Get(gachaInfo, query, gachaID, requestAt, requestAt); err != nil {
-		if sql.ErrNoRows == err {
-			return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha"))
+	for _, gm := range getGachaMasters() {
+		if fmt.Sprintf("%d", gm.ID) == gachaID && gm.StartAt <= requestAt && gm.EndAt >= requestAt {
+			gachaInfo = gm
+			break
 		}
-		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	if gachaInfo == nil {
+		return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha"))
 	}
 
 	// gachaItemMasterからアイテムリスト取得
 	gachaItemList := make([]*GachaItemMaster, 0)
-	err = h.DB.Select(&gachaItemList, "SELECT * FROM gacha_item_masters WHERE gacha_id=? ORDER BY id ASC", gachaID)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	for _, gim := range getGachaItemMasters() {
+		if gim.GachaID == gachaInfo.ID {
+			gachaItemList = append(gachaItemList, gim)
+		}
 	}
+	sort.Slice(gachaItemList, func(i, j int) bool {
+		return gachaItemList[i].ID < gachaItemList[j].ID
+	})
 	if len(gachaItemList) == 0 {
 		return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item"))
 	}
 
 	// weightの合計値を算出
 	var sum int64
-	err = h.DB.Get(&sum, "SELECT SUM(weight) FROM gacha_item_masters WHERE gacha_id=?", gachaID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusNotFound, err)
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
+	for _, gim := range gachaItemList {
+		sum += int64(gim.Weight)
 	}
 
 	// random値の導出 & 抽選
@@ -2462,12 +2464,22 @@ type VersionMaster struct {
 }
 
 // Cache
+// TODO: 重複時の更新について考える
 var (
 	masterVersions   []*VersionMaster
 	muMasterVersions sync.RWMutex
 
 	itemMasters   []*ItemMaster
 	muItemMasters sync.RWMutex
+
+	gachaMasters   []*GachaMaster
+	muGachaMasters sync.RWMutex
+
+	gachaItemMasters   []*GachaItemMaster
+	muGachaItemMasters sync.RWMutex
+
+	presentAllMasters   []*PresentAllMaster
+	muPresentAllMasters sync.RWMutex
 
 	loginBonusMasters   []*LoginBonusMaster
 	muLoginBonusMasters sync.RWMutex
@@ -2492,6 +2504,30 @@ func resetMasterCache(dbx *sqlx.DB) error {
 		return err
 	}
 	itemMasters = allItemMasters
+
+	muGachaMasters.Lock()
+	defer muGachaMasters.Unlock()
+	var allGachaMasters []*GachaMaster
+	if err := dbx.Select(&allGachaMasters, "SELECT * FROM gacha_masters"); err != nil {
+		return err
+	}
+	gachaMasters = allGachaMasters
+
+	muGachaItemMasters.Lock()
+	defer muGachaItemMasters.Unlock()
+	var allGachaItemMasters []*GachaItemMaster
+	if err := dbx.Select(&allGachaItemMasters, "SELECT * FROM gacha_item_masters"); err != nil {
+		return err
+	}
+	gachaItemMasters = allGachaItemMasters
+
+	muPresentAllMasters.Lock()
+	defer muPresentAllMasters.Unlock()
+	var allPresentAllMasters []*PresentAllMaster
+	if err := dbx.Select(&allPresentAllMasters, "SELECT * FROM present_all_masters"); err != nil {
+		return err
+	}
+	presentAllMasters = allPresentAllMasters
 
 	muLoginBonusMasters.Lock()
 	defer muLoginBonusMasters.Unlock()
@@ -2534,6 +2570,42 @@ func cacheItemMasters(masters []*ItemMaster) {
 	muItemMasters.Lock()
 	defer muItemMasters.Unlock()
 	itemMasters = append(itemMasters, masters...)
+}
+
+func getGachaMasters() []*GachaMaster {
+	muGachaMasters.RLock()
+	defer muGachaMasters.RUnlock()
+	return gachaMasters
+}
+
+func cacheGachaMasters(masters []*GachaMaster) {
+	muGachaMasters.Lock()
+	defer muGachaMasters.Unlock()
+	gachaMasters = append(gachaMasters, masters...)
+}
+
+func getGachaItemMasters() []*GachaItemMaster {
+	muGachaItemMasters.RLock()
+	defer muGachaItemMasters.RUnlock()
+	return gachaItemMasters
+}
+
+func cacheGachaItemMasters(masters []*GachaItemMaster) {
+	muGachaItemMasters.Lock()
+	defer muGachaItemMasters.Unlock()
+	gachaItemMasters = append(gachaItemMasters, masters...)
+}
+
+func getPresentAllMasters() []*PresentAllMaster {
+	muPresentAllMasters.RLock()
+	defer muPresentAllMasters.RUnlock()
+	return presentAllMasters
+}
+
+func cachePresentAllMasters(masters []*PresentAllMaster) {
+	muPresentAllMasters.Lock()
+	defer muPresentAllMasters.Unlock()
+	presentAllMasters = append(presentAllMasters, masters...)
 }
 
 func getLoginBonusMasters() []*LoginBonusMaster {

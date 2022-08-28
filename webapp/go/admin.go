@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/labstack/echo/v4"
 	"golang.org/x/crypto/bcrypt"
@@ -167,21 +166,11 @@ func (h *Handler) adminListMaster(c echo.Context) error {
 
 	items := getItemMasters()
 
-	gachas := make([]*GachaMaster, 0)
-	if err := h.DB.Select(&gachas, "SELECT * FROM gacha_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	gachas := getGachaMasters()
 
-	gachaItems := make([]*GachaItemMaster, 0)
-	if err := h.DB.Select(&gachaItems, "SELECT * FROM gacha_item_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	gachaItems := getGachaItemMasters()
 
-	presentAlls := make([]*PresentAllMaster, 0)
-	if err := h.DB.Select(&presentAlls, "SELECT * FROM present_all_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-
-	}
+	presentAlls := getPresentAllMasters()
 
 	loginBonuses := getLoginBonusMasters()
 
@@ -344,29 +333,46 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 	if gachaRecs != nil {
-		data := []map[string]interface{}{}
+		gachaMasters := make([]*GachaMaster, 0, len(gachaRecs))
 		for i, v := range gachaRecs {
 			if i == 0 {
 				continue
 			}
-			data = append(data, map[string]interface{}{
-				"id":            v[0],
-				"name":          v[1],
-				"start_at":      v[2],
-				"end_at":        v[3],
-				"display_order": v[4],
-				"created_at":    v[5],
+
+			id, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+
+			startAt, err := strconv.ParseInt(v[2], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			endAt, err := strconv.ParseInt(v[3], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			displayOrder, err := strconv.ParseInt(v[4], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			createdAt, err := strconv.ParseInt(v[5], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+
+			gachaMasters = append(gachaMasters, &GachaMaster{
+				ID:           id,
+				Name:         v[1],
+				StartAt:      startAt,
+				EndAt:        endAt,
+				DisplayOrder: int(displayOrder),
+				CreatedAt:    createdAt,
 			})
 		}
 
-		query := strings.Join([]string{
-			"INSERT INTO gacha_masters(id, name, start_at, end_at, display_order, created_at)",
-			"VALUES (:id, :name, :start_at, :end_at, :display_order, :created_at)",
-			"ON DUPLICATE KEY UPDATE name=VALUES(name), start_at=VALUES(start_at), end_at=VALUES(end_at), display_order=VALUES(display_order), created_at=VALUES(created_at)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		cacheGachaMasters(gachaMasters)
+
 	} else {
 		c.Logger().Debug("Skip Update Master: gachaMaster")
 	}
@@ -379,30 +385,53 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 	if gachaItemRecs != nil {
-		data := []map[string]interface{}{}
+		gachaItemMasters := make([]*GachaItemMaster, 0, len(gachaItemRecs))
 		for i, v := range gachaItemRecs {
 			if i == 0 {
 				continue
 			}
-			data = append(data, map[string]interface{}{
-				"id":         v[0],
-				"gacha_id":   v[1],
-				"item_type":  v[2],
-				"item_id":    v[3],
-				"amount":     v[4],
-				"weight":     v[5],
-				"created_at": v[6],
+
+			id, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			gachaID, err := strconv.ParseInt(v[1], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			itemType, err := strconv.ParseInt(v[2], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			itemID, err := strconv.ParseInt(v[3], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			amount, err := strconv.ParseInt(v[4], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			weight, err := strconv.ParseInt(v[5], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			createdAt, err := strconv.ParseInt(v[6], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+
+			gachaItemMasters = append(gachaItemMasters, &GachaItemMaster{
+				ID:        id,
+				GachaID:   gachaID,
+				ItemType:  int(itemType),
+				ItemID:    itemID,
+				Amount:    int(amount),
+				Weight:    int(weight),
+				CreatedAt: createdAt,
 			})
 		}
 
-		query := strings.Join([]string{
-			"INSERT INTO gacha_item_masters(id, gacha_id, item_type, item_id, amount, weight, created_at)",
-			"VALUES (:id, :gacha_id, :item_type, :item_id, :amount, :weight, :created_at)",
-			"ON DUPLICATE KEY UPDATE gacha_id=VALUES(gacha_id), item_type=VALUES(item_type), item_id=VALUES(item_id), amount=VALUES(amount), weight=VALUES(weight), created_at=VALUES(created_at)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		cacheGachaItemMasters(gachaItemMasters)
 	} else {
 		c.Logger().Debug("Skip Update Master: gachaItemMaster")
 	}
@@ -415,31 +444,54 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 	if presentAllRecs != nil {
-		data := []map[string]interface{}{}
+		presentAllMasters := make([]*PresentAllMaster, 0, len(presentAllRecs))
 		for i, v := range presentAllRecs {
 			if i == 0 {
 				continue
 			}
-			data = append(data, map[string]interface{}{
-				"id":                  v[0],
-				"registered_start_at": v[1],
-				"registered_end_at":   v[2],
-				"item_type":           v[3],
-				"item_id":             v[4],
-				"amount":              v[5],
-				"present_message":     v[6],
-				"created_at":          v[7],
+
+			id, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			registeredStartAt, err := strconv.ParseInt(v[1], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			registeredEndAt, err := strconv.ParseInt(v[2], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			itemType, err := strconv.ParseInt(v[3], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			itemID, err := strconv.ParseInt(v[4], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			amount, err := strconv.ParseInt(v[5], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			createdAt, err := strconv.ParseInt(v[7], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+
+			presentAllMasters = append(presentAllMasters, &PresentAllMaster{
+				ID:                id,
+				RegisteredStartAt: registeredStartAt,
+				RegisteredEndAt:   registeredEndAt,
+				ItemType:          int(itemType),
+				ItemID:            itemID,
+				Amount:            amount,
+				PresentMessage:    v[6],
+				CreatedAt:         createdAt,
 			})
 		}
 
-		query := strings.Join([]string{
-			"INSERT INTO present_all_masters(id, registered_start_at, registered_end_at, item_type, item_id, amount, present_message, created_at)",
-			"VALUES (:id, :registered_start_at, :registered_end_at, :item_type, :item_id, :amount, :present_message, :created_at)",
-			"ON DUPLICATE KEY UPDATE registered_start_at=VALUES(registered_start_at), registered_end_at=VALUES(registered_end_at), item_type=VALUES(item_type), item_id=VALUES(item_id), amount=VALUES(amount), present_message=VALUES(present_message), created_at=VALUES(created_at)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		cachePresentAllMasters(presentAllMasters)
 	} else {
 		c.Logger().Debug("Skip Update Master: presentAllMaster")
 	}
