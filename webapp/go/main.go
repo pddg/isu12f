@@ -176,10 +176,6 @@ func (h *Handler) getAdminDB() *sqlx.DB {
 	return h.dbShards[0]
 }
 
-//func (h *Handler) getSessionDB() *sqlx.DB {
-//	return h.dbShards[0]
-//}
-
 // adminMiddleware
 func (h *Handler) adminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
