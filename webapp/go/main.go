@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/rand"
 	"net/http"
@@ -24,6 +26,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -48,11 +51,16 @@ const (
 	PresentCountPerPage int = 100
 
 	SQLDirectory string = "../sql/"
+	nShard              = 2
 )
 
+// isu4, isu5
+var dbHosts = []string{"133.152.6.252", "133.152.6.253"}
+
 type Handler struct {
-	DB    *sqlx.DB
-	Redis *redis.Client
+	DB       *sqlx.DB
+	Redis    *redis.Client
+	dbShards []*sqlx.DB
 }
 
 func main() {
@@ -70,18 +78,15 @@ func main() {
 	}))
 
 	// connect db
-	dbx, err := connectDB(false)
+	dbs, err := connectDBs()
 	if err != nil {
 		e.Logger.Fatalf("failed to connect to db: %v", err)
 	}
-	defer dbx.Close()
-	for {
-		if err := dbx.Ping(); err != nil {
-			e.Logger.Errorf("failed to ping db: %v", err)
-			continue
+	defer func(dbs []*sqlx.DB) {
+		for _, db := range dbs {
+			db.Close()
 		}
-		break
-	}
+	}(dbs)
 
 	// connect redis
 	redisClient := redis.NewClient(&redis.Options{
@@ -98,15 +103,16 @@ func main() {
 	// setting server
 	e.Server.Addr = fmt.Sprintf(":%v", "8080")
 	h := &Handler{
-		DB:    dbx,
-		Redis: redisClient,
+		DB:       dbs[1], // isu5
+		Redis:    redisClient,
+		dbShards: dbs,
 	}
 
 	// e.Use(middleware.CORS())
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{}))
 
 	// utility
-	e.POST("/initialize", initialize)
+	e.POST("/initialize", h.initialize)
 	e.GET("/health", h.health)
 
 	// feature
@@ -138,22 +144,34 @@ func main() {
 	e.Logger.Error(e.StartServer(e.Server))
 }
 
-func connectDB(batch bool) (*sqlx.DB, error) {
-	dsn := fmt.Sprintf(
-		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=%s&multiStatements=%t&interpolateParams=true",
-		getEnv("ISUCON_DB_USER", "isucon"),
-		getEnv("ISUCON_DB_PASSWORD", "isucon"),
-		getEnv("ISUCON_DB_HOST", "127.0.0.1"),
-		getEnv("ISUCON_DB_PORT", "3306"),
-		getEnv("ISUCON_DB_NAME", "isucon"),
-		"Asia%2FTokyo",
-		batch,
-	)
-	dbx, err := sqlx.Open("mysql", dsn)
-	if err != nil {
-		return nil, err
+func connectDBs() ([]*sqlx.DB, error) {
+	dbs := make([]*sqlx.DB, 0, nShard)
+	for _, host := range dbHosts {
+		dsn := fmt.Sprintf(
+			"isucon:isucon@tcp(%s:3306)/isucon?charset=utf8mb4&parseTime=true&loc=Asia%%2FTokyo&multiStatements=true&interpolateParams=true",
+			host,
+		)
+		db, err := sqlx.Open("mysql", dsn)
+		if err != nil {
+			return nil, err
+		}
+		for {
+			if err := db.Ping(); err == nil {
+				break
+			}
+			log.Printf("failed to ping db: %v", err)
+		}
+		dbs = append(dbs, db)
 	}
-	return dbx, nil
+	return dbs, nil
+}
+
+func getDBShardByUserID(shards []*sqlx.DB, userID int64) *sqlx.DB {
+	return shards[userID%nShard]
+}
+
+func (h *Handler) getDB(userID int64) *sqlx.DB {
+	return getDBShardByUserID(h.dbShards, userID)
 }
 
 // adminMiddleware
@@ -808,22 +826,28 @@ func (h *Handler) obtainItems(tx *sqlx.Tx, items []*UserPresent, itemType int, r
 
 // initialize 初期化処理
 // POST /initialize
-func initialize(c echo.Context) error {
+func (h *Handler) initialize(c echo.Context) error {
 	rand.Seed(time.Now().UnixNano())
 
-	dbx, err := connectDB(true)
-	if err != nil {
+	eg, _ := errgroup.WithContext(context.TODO())
+	for _, host := range dbHosts {
+		host := host
+		eg.Go(func() error {
+			cmd := exec.Command("/bin/sh", "-c", SQLDirectory+"init.sh")
+			cmd.Env = append(os.Environ(), "ISUCON_DB_HOST="+host)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				c.Logger().Errorf("Failed to initialize %s: %v", string(out), err)
+				return err
+			}
+			return nil
+		})
+	}
+
+	if err := eg.Wait(); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	defer dbx.Close()
 
-	out, err := exec.Command("/bin/sh", "-c", SQLDirectory+"init.sh").CombinedOutput()
-	if err != nil {
-		c.Logger().Errorf("Failed to initialize %s: %v", string(out), err)
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
-	if err := resetMasterCache(dbx); err != nil {
+	if err := resetMasterCache(h.dbShards[0]); err != nil {
 		c.Logger().Errorf("Failed to reset master cache: %v", err)
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
