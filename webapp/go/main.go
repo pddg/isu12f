@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/rand"
 	"net/http"
@@ -38,15 +39,21 @@ var (
 	ErrGeneratePassword         error = fmt.Errorf("failed to password hash") //nolint:deadcode
 )
 
+var (
+	dbIPs = []string{"133.152.6.252", "133.152.6.253"}
+)
+
 const (
 	DeckCardNumber      int = 3
 	PresentCountPerPage int = 100
 
 	SQLDirectory string = "../sql/"
+	numDBs              = 2
 )
 
 type Handler struct {
-	DB *sqlx.DB
+	DB  *sqlx.DB
+	DBs []*sqlx.DB
 }
 
 func main() {
@@ -63,23 +70,30 @@ func main() {
 	}))
 
 	// connect db
-	dbx, err := connectDB(false)
+	dbxs, err := connectDB(false)
 	if err != nil {
 		e.Logger.Fatalf("failed to connect to db: %v", err)
 	}
-	defer dbx.Close()
+
+	defer func(dbxs []*sqlx.DB) {
+		for _, dbx := range dbxs {
+			err := dbx.Close()
+			log.Println(err)
+		}
+	}(dbxs)
 
 	// setting server
 	e.Server.Addr = fmt.Sprintf(":%v", "8080")
 	h := &Handler{
-		DB: dbx,
+		DB:  dbxs[0],
+		DBs: dbxs,
 	}
 
 	// e.Use(middleware.CORS())
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{}))
 
 	// utility
-	e.POST("/initialize", initialize)
+	e.POST("/initialize", h.initialize)
 	e.GET("/health", h.health)
 
 	// feature
@@ -111,22 +125,25 @@ func main() {
 	e.Logger.Error(e.StartServer(e.Server))
 }
 
-func connectDB(batch bool) (*sqlx.DB, error) {
-	dsn := fmt.Sprintf(
-		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=%s&multiStatements=%t&interpolateParams=true",
-		getEnv("ISUCON_DB_USER", "isucon"),
-		getEnv("ISUCON_DB_PASSWORD", "isucon"),
-		getEnv("ISUCON_DB_HOST", "127.0.0.1"),
-		getEnv("ISUCON_DB_PORT", "3306"),
-		getEnv("ISUCON_DB_NAME", "isucon"),
-		"Asia%2FTokyo",
-		batch,
-	)
-	dbx, err := sqlx.Open("mysql", dsn)
-	if err != nil {
-		return nil, err
+func connectDB(batch bool) (dbs []*sqlx.DB, err error) {
+	for _, ip := range dbIPs {
+		dsn := fmt.Sprintf(
+			"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=%s&multiStatements=%t&interpolateParams=true",
+			getEnv("ISUCON_DB_USER", "isucon"),
+			getEnv("ISUCON_DB_PASSWORD", "isucon"),
+			ip,
+			getEnv("ISUCON_DB_PORT", "3306"),
+			getEnv("ISUCON_DB_NAME", "isucon"),
+			"Asia%2FTokyo",
+			batch,
+		)
+		dbx, err := sqlx.Open("mysql", dsn)
+		if err != nil {
+			return nil, err
+		}
+		dbs = append(dbs, dbx)
 	}
-	return dbx, nil
+	return
 }
 
 // adminMiddleware
@@ -617,19 +634,17 @@ func (h *Handler) obtainItem(tx *sqlx.Tx, userID, itemID int64, itemType int, ob
 
 // initialize 初期化処理
 // POST /initialize
-func initialize(c echo.Context) error {
+func (h *Handler) initialize(c echo.Context) error {
 	rand.Seed(time.Now().UnixNano())
 
-	dbx, err := connectDB(true)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	defer dbx.Close()
-
-	out, err := exec.Command("/bin/sh", "-c", SQLDirectory+"init.sh").CombinedOutput()
-	if err != nil {
-		c.Logger().Errorf("Failed to initialize %s: %v", string(out), err)
-		return errorResponse(c, http.StatusInternalServerError, err)
+	for _, ip := range dbIPs {
+		cmd := exec.Command("/bin/sh", "-c", SQLDirectory+"init.sh")
+		cmd.Env = append(os.Environ(), fmt.Sprintf("ISUCON_DB_HOST=%s", ip))
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			c.Logger().Errorf("Failed to initialize %s: %v", string(out), err)
+			return errorResponse(c, http.StatusInternalServerError, err)
+		}
 	}
 
 	return successResponse(c, &InitializeResponse{
