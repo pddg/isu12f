@@ -785,20 +785,6 @@ func (h *Handler) obtainItem(tx *sqlx.Tx, userID, itemID int64, itemType int, ob
 	}
 }
 
-func (h *Handler) obtainItems(tx *sqlx.Tx, items []*UserPresent, itemType int, requestAt int64) error {
-	switch itemType {
-	//case 1:
-	//	return h.updateUserCoins(tx, userID, obtainAmount)
-	case 2: // card(ハンマー)
-		return h.addUserCards(tx, items, requestAt)
-	case 3, 4: // 強化素材
-		//return h.updateItem(tx, userID, itemID, itemType, obtainAmount, requestAt)
-	default:
-		return ErrInvalidItemType
-	}
-	return nil
-}
-
 // initialize 初期化処理
 // POST /initialize
 func initialize(c echo.Context) error {
