@@ -213,7 +213,7 @@ CREATE TABLE `version_masters` (
 CREATE TABLE `user_sessions` (
   `id` bigint NOT NULL,
   `user_id` bigint NOT NULL,
-  `session_id` varchar(128) NOT NULL,
+  `session_id` varchar(255) NOT NULL,
   `created_at` bigint NOT NULL,
   `updated_at` bigint NOT NULL,
   `expired_at` bigint NOT NULL,
