@@ -305,15 +305,7 @@ func (h *Handler) checkViewerID(userID int64, viewerID string) error {
 
 // checkBan
 func (h *Handler) checkBan(userID int64) (bool, error) {
-	banUser := new(UserBan)
-	query := "SELECT * FROM user_bans WHERE user_id=?"
-	if err := h.getUserDB(userID).Get(banUser, query, userID); err != nil {
-		if err == sql.ErrNoRows {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
+	return isBannedUser(userID), nil
 }
 
 // getRequestTime リクエストを受けた時間をコンテキストからunixtimeで取得する
@@ -2408,6 +2400,9 @@ var (
 	sessionCacheBySessionID map[string]*Session
 	muSessionCache          sync.RWMutex
 
+	bansByUserID map[int64]struct{}
+	muBans       sync.RWMutex
+
 	masterVersions   []*VersionMaster
 	muMasterVersions sync.RWMutex
 
@@ -2435,6 +2430,17 @@ func resetCache(db *sqlx.DB) error {
 	defer muSessionCache.Unlock()
 	sessionIDCacheByUserID = make(map[int64]string, 10000)
 	sessionCacheBySessionID = make(map[string]*Session, 10000)
+
+	muBans.Lock()
+	defer muBans.Unlock()
+	var allBans []*UserBan
+	if err := db.Select(&allBans, "SELECT * FROM user_bans"); err != nil {
+		return err
+	}
+	bansByUserID = make(map[int64]struct{}, len(allBans))
+	for _, ub := range allBans {
+		bansByUserID[ub.UserID] = struct{}{}
+	}
 
 	muMasterVersions.Lock()
 	defer muMasterVersions.Unlock()
@@ -2523,6 +2529,19 @@ func clearUserSession(sess *Session) {
 	defer muSessionCache.Unlock()
 	delete(sessionIDCacheByUserID, sess.UserID)
 	delete(sessionCacheBySessionID, sess.SessionID)
+}
+
+func isBannedUser(userID int64) bool {
+	muBans.RLock()
+	defer muBans.RUnlock()
+	_, ok := bansByUserID[userID]
+	return ok
+}
+
+func cacheUserBan(userID int64) {
+	muBans.Lock()
+	defer muBans.Unlock()
+	bansByUserID[userID] = struct{}{}
 }
 
 func getMasterVersions() []*VersionMaster {
