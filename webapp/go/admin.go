@@ -168,10 +168,7 @@ func (h *Handler) adminListMaster(c echo.Context) error {
 
 	gachas := getGachaMasters()
 
-	gachaItems := make([]*GachaItemMaster, 0)
-	if err := h.DB.Select(&gachaItems, "SELECT * FROM gacha_item_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	gachaItems := getGachaItemMasters()
 
 	presentAlls := make([]*PresentAllMaster, 0)
 	if err := h.DB.Select(&presentAlls, "SELECT * FROM present_all_masters"); err != nil {
@@ -399,30 +396,53 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 	if gachaItemRecs != nil {
-		data := []map[string]interface{}{}
+		gachaItemMasters := make([]*GachaItemMaster, 0, len(gachaItemRecs))
 		for i, v := range gachaItemRecs {
 			if i == 0 {
 				continue
 			}
-			data = append(data, map[string]interface{}{
-				"id":         v[0],
-				"gacha_id":   v[1],
-				"item_type":  v[2],
-				"item_id":    v[3],
-				"amount":     v[4],
-				"weight":     v[5],
-				"created_at": v[6],
+
+			id, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			gachaID, err := strconv.ParseInt(v[1], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			itemType, err := strconv.ParseInt(v[2], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			itemID, err := strconv.ParseInt(v[3], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			amount, err := strconv.ParseInt(v[4], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			weight, err := strconv.ParseInt(v[5], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			createdAt, err := strconv.ParseInt(v[6], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+
+			gachaItemMasters = append(gachaItemMasters, &GachaItemMaster{
+				ID:        id,
+				GachaID:   gachaID,
+				ItemType:  int(itemType),
+				ItemID:    itemID,
+				Amount:    int(amount),
+				Weight:    int(weight),
+				CreatedAt: createdAt,
 			})
 		}
 
-		query := strings.Join([]string{
-			"INSERT INTO gacha_item_masters(id, gacha_id, item_type, item_id, amount, weight, created_at)",
-			"VALUES (:id, :gacha_id, :item_type, :item_id, :amount, :weight, :created_at)",
-			"ON DUPLICATE KEY UPDATE gacha_id=VALUES(gacha_id), item_type=VALUES(item_type), item_id=VALUES(item_id), amount=VALUES(amount), weight=VALUES(weight), created_at=VALUES(created_at)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		cacheGachaItemMasters(gachaItemMasters)
 	} else {
 		c.Logger().Debug("Skip Update Master: gachaItemMaster")
 	}
