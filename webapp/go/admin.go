@@ -170,11 +170,7 @@ func (h *Handler) adminListMaster(c echo.Context) error {
 
 	gachaItems := getGachaItemMasters()
 
-	presentAlls := make([]*PresentAllMaster, 0)
-	if err := h.DB.Select(&presentAlls, "SELECT * FROM present_all_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-
-	}
+	presentAlls := getPresentAllMasters()
 
 	loginBonuses := make([]*LoginBonusMaster, 0)
 	if err := h.DB.Select(&loginBonuses, "SELECT * FROM login_bonus_masters"); err != nil {
@@ -455,31 +451,54 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 	if presentAllRecs != nil {
-		data := []map[string]interface{}{}
+		presentAllMasters := make([]*PresentAllMaster, 0, len(presentAllRecs))
 		for i, v := range presentAllRecs {
 			if i == 0 {
 				continue
 			}
-			data = append(data, map[string]interface{}{
-				"id":                  v[0],
-				"registered_start_at": v[1],
-				"registered_end_at":   v[2],
-				"item_type":           v[3],
-				"item_id":             v[4],
-				"amount":              v[5],
-				"present_message":     v[6],
-				"created_at":          v[7],
+
+			id, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			registeredStartAt, err := strconv.ParseInt(v[1], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			registeredEndAt, err := strconv.ParseInt(v[2], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			itemType, err := strconv.ParseInt(v[3], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			itemID, err := strconv.ParseInt(v[4], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			amount, err := strconv.ParseInt(v[5], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			createdAt, err := strconv.ParseInt(v[7], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+
+			presentAllMasters = append(presentAllMasters, &PresentAllMaster{
+				ID:                id,
+				RegisteredStartAt: registeredStartAt,
+				RegisteredEndAt:   registeredEndAt,
+				ItemType:          int(itemType),
+				ItemID:            itemID,
+				Amount:            amount,
+				PresentMessage:    v[6],
+				CreatedAt:         createdAt,
 			})
 		}
 
-		query := strings.Join([]string{
-			"INSERT INTO present_all_masters(id, registered_start_at, registered_end_at, item_type, item_id, amount, present_message, created_at)",
-			"VALUES (:id, :registered_start_at, :registered_end_at, :item_type, :item_id, :amount, :present_message, :created_at)",
-			"ON DUPLICATE KEY UPDATE registered_start_at=VALUES(registered_start_at), registered_end_at=VALUES(registered_end_at), item_type=VALUES(item_type), item_id=VALUES(item_id), amount=VALUES(amount), present_message=VALUES(present_message), created_at=VALUES(created_at)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		cachePresentAllMasters(presentAllMasters)
 	} else {
 		c.Logger().Debug("Skip Update Master: presentAllMaster")
 	}

@@ -438,17 +438,18 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) (
 
 // obtainPresent プレゼント付与処理
 func (h *Handler) obtainPresent(tx *sqlx.Tx, userID int64, requestAt int64) ([]*UserPresent, error) {
-	normalPresents := make([]*PresentAllMaster, 0)
-	query := "SELECT * FROM present_all_masters WHERE registered_start_at <= ? AND registered_end_at >= ?"
-	if err := tx.Select(&normalPresents, query, requestAt, requestAt); err != nil {
-		return nil, err
+	var normalPresents []*PresentAllMaster
+	for _, pm := range getPresentAllMasters() {
+		if pm.RegisteredStartAt <= requestAt && pm.RegisteredEndAt >= requestAt {
+			normalPresents = append(normalPresents, pm)
+		}
 	}
 
 	// 全員プレゼント取得情報更新
 	obtainPresents := make([]*UserPresent, 0)
 	for _, np := range normalPresents {
 		received := new(UserPresentAllReceivedHistory)
-		query = "SELECT * FROM user_present_all_received_history WHERE user_id=? AND present_all_id=?"
+		query := "SELECT * FROM user_present_all_received_history WHERE user_id=? AND present_all_id=?"
 		err := tx.Get(received, query, userID, np.ID)
 		if err == nil {
 			// プレゼント配布済
@@ -2226,6 +2227,15 @@ var (
 
 	gachaItemMasters   []*GachaItemMaster
 	muGachaItemMasters sync.RWMutex
+
+	presentAllMasters   []*PresentAllMaster
+	muPresentAllMasters sync.RWMutex
+
+	loginBonusMasters   []*LoginBonusMaster
+	muLoginBonusMasters sync.RWMutex
+
+	loginBonusRewardMasters   []*LoginBonusRewardMaster
+	muLoginBonusRewardMasters sync.RWMutex
 )
 
 func resetCache(db *sqlx.DB) error {
@@ -2265,6 +2275,30 @@ func resetCache(db *sqlx.DB) error {
 		return err
 	}
 	gachaItemMasters = allGachaItemMasters
+
+	muPresentAllMasters.Lock()
+	defer muPresentAllMasters.Unlock()
+	var allPresentAllMasters []*PresentAllMaster
+	if err := db.Select(&allPresentAllMasters, "SELECT * FROM present_all_masters"); err != nil {
+		return err
+	}
+	presentAllMasters = allPresentAllMasters
+
+	muLoginBonusMasters.Lock()
+	defer muLoginBonusMasters.Unlock()
+	var allLoginBonusMasters []*LoginBonusMaster
+	if err := db.Select(&allLoginBonusMasters, "SELECT * FROM login_bonus_masters"); err != nil {
+		return err
+	}
+	loginBonusMasters = allLoginBonusMasters
+
+	muLoginBonusRewardMasters.Lock()
+	defer muLoginBonusRewardMasters.Unlock()
+	var allLoginBonusRewardMasters []*LoginBonusRewardMaster
+	if err := db.Select(&allLoginBonusRewardMasters, "SELECT * FROM login_bonus_reward_masters"); err != nil {
+		return err
+	}
+	loginBonusRewardMasters = allLoginBonusRewardMasters
 
 	return nil
 }
@@ -2384,5 +2418,27 @@ func cacheGachaItemMasters(masters []*GachaItemMaster) {
 	gachaItemMasters = make([]*GachaItemMaster, 0, len(gachaItemMap))
 	for _, gi := range gachaItemMap {
 		gachaItemMasters = append(gachaItemMasters, gi)
+	}
+}
+
+func getPresentAllMasters() []*PresentAllMaster {
+	muPresentAllMasters.RLock()
+	defer muPresentAllMasters.RUnlock()
+	return presentAllMasters
+}
+
+func cachePresentAllMasters(masters []*PresentAllMaster) {
+	muPresentAllMasters.Lock()
+	defer muPresentAllMasters.Unlock()
+	presentMap := make(map[int64]*PresentAllMaster, len(presentAllMasters)+len(masters))
+	for _, p := range presentAllMasters {
+		presentMap[p.ID] = p
+	}
+	for _, p := range masters {
+		presentMap[p.ID] = p
+	}
+	presentAllMasters = make([]*PresentAllMaster, 0, len(presentMap))
+	for _, p := range presentMap {
+		presentAllMasters = append(presentAllMasters, p)
 	}
 }
