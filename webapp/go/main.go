@@ -405,12 +405,14 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) (
 
 		// 今回付与するリソース取得
 		rewardItem := new(LoginBonusRewardMaster)
-		query = "SELECT * FROM login_bonus_reward_masters WHERE login_bonus_id=? AND reward_sequence=?"
-		if err := tx.Get(rewardItem, query, bonus.ID, userBonus.LastRewardSequence); err != nil {
-			if err == sql.ErrNoRows {
-				return nil, ErrLoginBonusRewardNotFound
+		for _, lbr := range getLoginBonusRewardMasters() {
+			if lbr.LoginBonusID == bonus.ID && lbr.RewardSequence == userBonus.LastRewardSequence {
+				rewardItem = lbr
+				break
 			}
-			return nil, err
+		}
+		if rewardItem == nil {
+			return nil, ErrLoginBonusRewardNotFound
 		}
 
 		_, _, _, err := h.obtainItem(tx, userID, rewardItem.ItemID, rewardItem.ItemType, rewardItem.Amount, requestAt)
@@ -2463,5 +2465,27 @@ func cacheLoginBonusMasters(masters []*LoginBonusMaster) {
 	loginBonusMasters = make([]*LoginBonusMaster, 0, len(loginBonusMap))
 	for _, lb := range loginBonusMap {
 		loginBonusMasters = append(loginBonusMasters, lb)
+	}
+}
+
+func getLoginBonusRewardMasters() []*LoginBonusRewardMaster {
+	muLoginBonusRewardMasters.RLock()
+	defer muLoginBonusRewardMasters.RUnlock()
+	return loginBonusRewardMasters
+}
+
+func cacheLoginBonusRewardMasters(masters []*LoginBonusRewardMaster) {
+	muLoginBonusRewardMasters.Lock()
+	defer muLoginBonusRewardMasters.Unlock()
+	loginBonusRewardMap := make(map[int64]*LoginBonusRewardMaster, len(loginBonusRewardMasters)+len(masters))
+	for _, lbr := range loginBonusRewardMasters {
+		loginBonusRewardMap[lbr.ID] = lbr
+	}
+	for _, lbr := range masters {
+		loginBonusRewardMap[lbr.ID] = lbr
+	}
+	loginBonusRewardMasters = make([]*LoginBonusRewardMaster, 0, len(loginBonusRewardMap))
+	for _, lbr := range loginBonusRewardMap {
+		loginBonusRewardMasters = append(loginBonusRewardMasters, lbr)
 	}
 }
