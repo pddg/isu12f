@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -212,13 +214,9 @@ func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 			return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
 		}
 
-		userSession := new(Session)
-		query := "SELECT * FROM user_sessions WHERE session_id=? AND deleted_at IS NULL"
-		if err := h.DB.Get(userSession, query, sessID); err != nil {
-			if err == sql.ErrNoRows {
-				return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
-			}
-			return errorResponse(c, http.StatusInternalServerError, err)
+		userSession, ok := getUserSessionBySessionID(sessID)
+		if !ok {
+			return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
 		}
 
 		if userSession.UserID != userID {
@@ -226,10 +224,7 @@ func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 		}
 
 		if userSession.ExpiredAt < requestAt {
-			query = "UPDATE user_sessions SET deleted_at=? WHERE session_id=?"
-			if _, err = h.DB.Exec(query, requestAt, sessID); err != nil {
-				return errorResponse(c, http.StatusInternalServerError, err)
-			}
+			clearUserSession(userSession)
 			return errorResponse(c, http.StatusUnauthorized, ErrExpiredSession)
 		}
 
@@ -641,6 +636,13 @@ func (h *Handler) initialize(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
+	if err := resetCache(); err != nil {
+		c.Logger().Errorf("Failed to reset cache: %v", err)
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+
+	runtime.GC()
+
 	return successResponse(c, &InitializeResponse{
 		Language: "go",
 	})
@@ -792,10 +794,7 @@ func (h *Handler) createUser(c echo.Context) error {
 		UpdatedAt: requestAt,
 		ExpiredAt: requestAt + 86400,
 	}
-	query = "INSERT INTO user_sessions(id, user_id, session_id, created_at, updated_at, expired_at) VALUES (?, ?, ?, ?, ?, ?)"
-	if _, err = tx.Exec(query, sess.ID, sess.UserID, sess.SessionID, sess.CreatedAt, sess.UpdatedAt, sess.ExpiredAt); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	updateUserSession(sess)
 
 	err = tx.Commit()
 	if err != nil {
@@ -871,10 +870,6 @@ func (h *Handler) login(c echo.Context) error {
 	defer tx.Rollback() //nolint:errcheck
 
 	// sessionを更新
-	query = "UPDATE user_sessions SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
-	if _, err = tx.Exec(query, requestAt, req.UserID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
 	sID, err := h.generateID()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -891,10 +886,7 @@ func (h *Handler) login(c echo.Context) error {
 		UpdatedAt: requestAt,
 		ExpiredAt: requestAt + 86400,
 	}
-	query = "INSERT INTO user_sessions(id, user_id, session_id, created_at, updated_at, expired_at) VALUES (?, ?, ?, ?, ?, ?)"
-	if _, err = tx.Exec(query, sess.ID, sess.UserID, sess.SessionID, sess.CreatedAt, sess.UpdatedAt, sess.ExpiredAt); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	updateUserSession(sess)
 
 	// すでにログインしているユーザはログイン処理をしない
 	if isCompleteTodayLogin(time.Unix(user.LastActivatedAt, 0), time.Unix(requestAt, 0)) {
@@ -2176,4 +2168,50 @@ type VersionMaster struct {
 	ID            int64  `json:"id" db:"id"`
 	Status        int    `json:"status" db:"status"`
 	MasterVersion string `json:"masterVersion" db:"master_version"`
+}
+
+// Cache
+var (
+	sessionIDCacheByUserID  map[int64]string
+	sessionCacheBySessionID map[string]*Session
+	muSessionCache          sync.RWMutex
+)
+
+func resetCache() error {
+	muSessionCache.Lock()
+	defer muSessionCache.Unlock()
+	sessionIDCacheByUserID = make(map[int64]string, 10000)
+	sessionCacheBySessionID = make(map[string]*Session, 10000)
+
+	return nil
+}
+
+func getUserSessionBySessionID(sessID string) (*Session, bool) {
+	muSessionCache.RLock()
+	defer muSessionCache.RUnlock()
+	sess, ok := sessionCacheBySessionID[sessID]
+	if !ok {
+		return nil, false
+	}
+	if sess == nil {
+		return nil, false
+	}
+	return sess, true
+}
+
+func updateUserSession(sess *Session) {
+	muSessionCache.Lock()
+	defer muSessionCache.Unlock()
+	if oldSessionID, ok := sessionIDCacheByUserID[sess.UserID]; ok {
+		delete(sessionCacheBySessionID, oldSessionID)
+	}
+	sessionIDCacheByUserID[sess.UserID] = sess.SessionID
+	sessionCacheBySessionID[sess.SessionID] = sess
+}
+
+func clearUserSession(sess *Session) {
+	muSessionCache.Lock()
+	defer muSessionCache.Unlock()
+	delete(sessionIDCacheByUserID, sess.UserID)
+	delete(sessionCacheBySessionID, sess.SessionID)
 }
