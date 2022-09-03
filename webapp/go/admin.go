@@ -164,10 +164,7 @@ func (h *Handler) adminLogout(c echo.Context) error {
 func (h *Handler) adminListMaster(c echo.Context) error {
 	masterVersions := getMasterVersions()
 
-	items := make([]*ItemMaster, 0)
-	if err := h.DB.Select(&items, "SELECT * FROM item_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	items := getItemMasters()
 
 	gachas := make([]*GachaMaster, 0)
 	if err := h.DB.Select(&gachas, "SELECT * FROM gacha_masters"); err != nil {
@@ -268,33 +265,79 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 	if itemMasterRecs != nil {
-		data := []map[string]interface{}{}
+		itemMasters := make([]*ItemMaster, 0, len(itemMasterRecs))
 		for i, v := range itemMasterRecs {
 			if i == 0 {
 				continue
 			}
-			data = append(data, map[string]interface{}{
-				"id":                 v[0],
-				"item_type":          v[1],
-				"name":               v[2],
-				"description":        v[3],
-				"amount_per_sec":     v[4],
-				"max_level":          v[5],
-				"max_amount_per_sec": v[6],
-				"base_exp_per_level": v[7],
-				"gained_exp":         v[8],
-				"shortening_min":     v[9],
-			})
+
+			id, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			itemType, err := strconv.ParseInt(v[1], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			newItemMaster := &ItemMaster{
+				ID:          id,
+				ItemType:    int(itemType),
+				Name:        v[2],
+				Description: v[3],
+			}
+			if v[4] != "" {
+				amountPerSec, err := strconv.Atoi(v[4])
+				if err != nil {
+					c.Logger().Printf("csv data: %v", v)
+					return errorResponse(c, http.StatusInternalServerError, err)
+				}
+				newItemMaster.AmountPerSec = &amountPerSec
+			}
+			if v[5] != "" {
+				maxLevel, err := strconv.Atoi(v[5])
+				if err != nil {
+					c.Logger().Printf("csv data: %v", v)
+					return errorResponse(c, http.StatusInternalServerError, err)
+				}
+				newItemMaster.MaxLevel = &maxLevel
+			}
+			if v[6] != "" {
+				maxAmountPerSec, err := strconv.Atoi(v[6])
+				if err != nil {
+					c.Logger().Printf("csv data: %v", v)
+					return errorResponse(c, http.StatusInternalServerError, err)
+				}
+				newItemMaster.MaxAmountPerSec = &maxAmountPerSec
+			}
+			if v[7] != "" {
+				baseExpPerLevel, err := strconv.Atoi(v[7])
+				if err != nil {
+					c.Logger().Printf("csv data: %v", v)
+					return errorResponse(c, http.StatusInternalServerError, err)
+				}
+				newItemMaster.BaseExpPerLevel = &baseExpPerLevel
+			}
+			if v[8] != "" {
+				gainedExp, err := strconv.Atoi(v[8])
+				if err != nil {
+					c.Logger().Printf("csv data: %v", v)
+					return errorResponse(c, http.StatusInternalServerError, err)
+				}
+				newItemMaster.GainedExp = &gainedExp
+			}
+			if v[9] != "" {
+				shorteningMin, err := strconv.ParseInt(v[9], 10, 64)
+				if err != nil {
+					c.Logger().Printf("csv data: %v", v)
+					return errorResponse(c, http.StatusInternalServerError, err)
+				}
+				newItemMaster.ShorteningMin = &shorteningMin
+			}
+
+			itemMasters = append(itemMasters, newItemMaster)
 		}
 
-		query := strings.Join([]string{
-			"INSERT INTO item_masters(id, item_type, name, description, amount_per_sec, max_level, max_amount_per_sec, base_exp_per_level, gained_exp, shortening_min)",
-			"VALUES (:id, :item_type, :name, :description, :amount_per_sec, :max_level, :max_amount_per_sec, :base_exp_per_level, :gained_exp, :shortening_min)",
-			"ON DUPLICATE KEY UPDATE item_type=VALUES(item_type), name=VALUES(name), description=VALUES(description), amount_per_sec=VALUES(amount_per_sec), max_level=VALUES(max_level), max_amount_per_sec=VALUES(max_amount_per_sec), base_exp_per_level=VALUES(base_exp_per_level), gained_exp=VALUES(gained_exp), shortening_min=VALUES(shortening_min)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		cacheItemMasters(itemMasters)
 	} else {
 		c.Logger().Debug("Skip Update Master: itemMaster")
 	}
