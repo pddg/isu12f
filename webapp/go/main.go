@@ -337,7 +337,7 @@ func (h *Handler) loginProcess(tx *sqlx.Tx, userID int64, requestAt int64) (*Use
 	}
 
 	// ログインボーナス処理
-	loginBonuses, err := h.obtainLoginBonus(tx, userID, requestAt)
+	loginBonuses, err := h.obtainLoginBonus(tx, user, requestAt)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -374,7 +374,7 @@ func isCompleteTodayLogin(lastActivatedAt, requestAt time.Time) bool {
 }
 
 // obtainLoginBonus
-func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) ([]*UserLoginBonus, error) {
+func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, user *User, requestAt int64) ([]*UserLoginBonus, error) {
 	// login bonus masterから有効なログインボーナスを取得
 	loginBonuses := make([]*LoginBonusMaster, 0)
 	for _, lb := range getLoginBonusMasters() {
@@ -383,32 +383,50 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) (
 		}
 	}
 
-	sendLoginBonuses := make([]*UserLoginBonus, 0)
+	loginBonusIDs := make([]int64, 0, len(loginBonuses))
+	for _, lb := range loginBonuses {
+		loginBonusIDs = append(loginBonusIDs, lb.ID)
+	}
+	query, params, err := sqlx.In("SELECT * FROM user_login_bonuses WHERE user_id=? AND login_bonus_id IN (?)", user.ID, loginBonusIDs)
+	if err != nil {
+		return nil, err
+	}
+	// 継続中のログインボーナス
+	var progressingLoginBonuses []*UserLoginBonus
+	if err := tx.Select(&progressingLoginBonuses, query, params...); err != nil {
+		return nil, err
+	}
 
-	for _, bonus := range loginBonuses {
-		initBonus := false
-		// ボーナスの進捗取得
-		userBonus := new(UserLoginBonus)
-		query := "SELECT * FROM user_login_bonuses WHERE user_id=? AND login_bonus_id=?"
-		if err := tx.Get(userBonus, query, userID, bonus.ID); err != nil {
-			if err != sql.ErrNoRows {
-				return nil, err
-			}
-			initBonus = true
-
+	// まだ受け取り始めて無いログインボーナスを用意する
+	userLoginBonusMap := make(map[int64]*UserLoginBonus, len(loginBonuses))
+	for _, ulb := range progressingLoginBonuses {
+		userLoginBonusMap[ulb.LoginBonusID] = ulb
+	}
+	for _, lb := range loginBonuses {
+		if _, ok := userLoginBonusMap[lb.ID]; !ok {
 			ubID, err := h.generateID()
 			if err != nil {
 				return nil, err
 			}
-			userBonus = &UserLoginBonus{ // ボーナス初期化
+			userLoginBonusMap[lb.ID] = &UserLoginBonus{
 				ID:                 ubID,
-				UserID:             userID,
-				LoginBonusID:       bonus.ID,
+				UserID:             user.ID,
+				LoginBonusID:       lb.ID,
 				LastRewardSequence: 0,
 				LoopCount:          1,
 				CreatedAt:          requestAt,
 				UpdatedAt:          requestAt,
 			}
+		}
+	}
+
+	sendLoginBonuses := make([]*UserLoginBonus, 0, len(loginBonuses))
+	rewardItems := make([]*UserPresent, 0, len(loginBonuses))
+	for _, bonus := range loginBonuses {
+		userBonus, ok := userLoginBonusMap[bonus.ID]
+		if !ok {
+			// ありえない
+			return nil, errors.New("user bonus not found in userLoginBonusMap")
 		}
 
 		// ボーナス進捗更新
@@ -437,25 +455,23 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) (
 			return nil, ErrLoginBonusRewardNotFound
 		}
 
-		_, _, _, err := h.obtainItem(tx, userID, rewardItem.ItemID, rewardItem.ItemType, rewardItem.Amount, requestAt)
-		if err != nil {
-			return nil, err
-		}
-
-		// 進捗の保存
-		if initBonus {
-			query = "INSERT INTO user_login_bonuses(id, user_id, login_bonus_id, last_reward_sequence, loop_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-			if _, err = tx.Exec(query, userBonus.ID, userBonus.UserID, userBonus.LoginBonusID, userBonus.LastRewardSequence, userBonus.LoopCount, userBonus.CreatedAt, userBonus.UpdatedAt); err != nil {
-				return nil, err
-			}
-		} else {
-			query = "UPDATE user_login_bonuses SET last_reward_sequence=?, loop_count=?, updated_at=? WHERE id=?"
-			if _, err = tx.Exec(query, userBonus.LastRewardSequence, userBonus.LoopCount, userBonus.UpdatedAt, userBonus.ID); err != nil {
-				return nil, err
-			}
-		}
+		rewardItems = append(rewardItems, &UserPresent{
+			ItemType: rewardItem.ItemType,
+			ItemID:   rewardItem.ItemID,
+			Amount:   int(rewardItem.Amount),
+		})
 
 		sendLoginBonuses = append(sendLoginBonuses, userBonus)
+	}
+	if err := h.obtainItems(tx, user, requestAt, rewardItems); err != nil {
+		return nil, err
+	}
+
+	if len(sendLoginBonuses) > 0 {
+		query = "INSERT INTO user_login_bonuses (id, user_id, login_bonus_id, last_reward_sequence, loop_count, created_at, updated_at, deleted_at) VALUES (:id, :user_id, :login_bonus_id, :last_reward_sequence, :loop_count, :created_at, :updated_at, :deleted_at) ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), login_bonus_id=VALUES(login_bonus_id), last_reward_sequence=VALUES(last_reward_sequence), loop_count=VALUES(loop_count), created_at=VALUES(created_at), updated_at=VALUES(updated_at), deleted_at=VALUES(deleted_at)"
+		if _, err := tx.NamedExec(query, sendLoginBonuses); err != nil {
+			return nil, err
+		}
 	}
 
 	return sendLoginBonuses, nil
