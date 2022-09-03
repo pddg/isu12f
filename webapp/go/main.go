@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/rand"
 	"net/http"
@@ -23,6 +25,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -47,10 +50,14 @@ const (
 	PresentCountPerPage int = 100
 
 	SQLDirectory string = "../sql/"
+	nShards             = 2
 )
 
+var dbHosts = []string{"133.152.6.252", "133.152.6.253"}
+
 type Handler struct {
-	DB *sqlx.DB
+	DB  *sqlx.DB
+	dbs []*sqlx.DB
 
 	initializedAt time.Time
 }
@@ -74,16 +81,21 @@ func main() {
 	}))
 
 	// connect db
-	dbx, err := connectDB(false)
+	dbs, err := connectDBs()
 	if err != nil {
 		e.Logger.Fatalf("failed to connect to db: %v", err)
 	}
-	defer dbx.Close()
+	defer func(dbs []*sqlx.DB) {
+		for _, db := range dbs {
+			db.Close()
+		}
+	}(dbs)
 
 	// setting server
 	e.Server.Addr = fmt.Sprintf(":%v", "8080")
 	h := &Handler{
-		DB: dbx,
+		DB:  dbs[0],
+		dbs: dbs,
 	}
 
 	// e.Use(middleware.CORS())
@@ -122,22 +134,26 @@ func main() {
 	e.Logger.Error(e.StartServer(e.Server))
 }
 
-func connectDB(batch bool) (*sqlx.DB, error) {
-	dsn := fmt.Sprintf(
-		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=%s&multiStatements=%t",
-		getEnv("ISUCON_DB_USER", "isucon"),
-		getEnv("ISUCON_DB_PASSWORD", "isucon"),
-		getEnv("ISUCON_DB_HOST", "127.0.0.1"),
-		getEnv("ISUCON_DB_PORT", "3306"),
-		getEnv("ISUCON_DB_NAME", "isucon"),
-		"Asia%2FTokyo",
-		batch,
-	)
-	dbx, err := sqlx.Open("mysql", dsn)
-	if err != nil {
-		return nil, err
+func connectDBs() ([]*sqlx.DB, error) {
+	dbs := make([]*sqlx.DB, 0, nShards)
+	for _, host := range dbHosts {
+		dsn := fmt.Sprintf(
+			"isucon:isucon@tcp(%s:3306)/isucon?charset=utf8mb4&parseTime=true&loc=Asia%%2FTokyo&multiStatements=true&interpolateParams=true",
+			host,
+		)
+		db, err := sqlx.Open("mysql", dsn)
+		if err != nil {
+			return nil, err
+		}
+		for {
+			if err := db.Ping(); err == nil {
+				break
+			}
+			log.Printf("failed to ping db: %v", err)
+		}
+		dbs = append(dbs, db)
 	}
-	return dbx, nil
+	return dbs, nil
 }
 
 // adminMiddleware
@@ -634,19 +650,24 @@ func (h *Handler) obtainItem(tx *sqlx.Tx, userID, itemID int64, itemType int, ob
 func (h *Handler) initialize(c echo.Context) error {
 	rand.Seed(time.Now().UnixNano())
 
-	dbx, err := connectDB(true)
-	if err != nil {
+	eg, _ := errgroup.WithContext(context.TODO())
+	for _, host := range dbHosts {
+		host := host
+		eg.Go(func() error {
+			cmd := exec.Command("/bin/sh", "-c", SQLDirectory+"init.sh")
+			cmd.Env = append(os.Environ(), "ISUCON_DB_HOST="+host)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				c.Logger().Errorf("Failed to initialize %s: %v", string(out), err)
+				return err
+			}
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	defer dbx.Close()
 
-	out, err := exec.Command("/bin/sh", "-c", SQLDirectory+"init.sh").CombinedOutput()
-	if err != nil {
-		c.Logger().Errorf("Failed to initialize %s: %v", string(out), err)
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
-	if err := resetCache(h.DB); err != nil {
+	if err := resetCache(h.dbs[0]); err != nil {
 		c.Logger().Errorf("Failed to reset cache: %v", err)
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
