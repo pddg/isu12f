@@ -548,6 +548,126 @@ func (h *Handler) obtainPresent(tx *sqlx.Tx, userID int64, requestAt int64) ([]*
 	return obtainPresents, nil
 }
 
+func (h *Handler) obtainItems(tx *sqlx.Tx, user *User, requestAt int64, presents []*UserPresent) error {
+	var addCoin int64
+	cards := make([]*UserCard, 0, len(presents))
+	itemPresents := make([]*UserPresent, 0, len(presents))
+
+	for _, p := range presents {
+		switch p.ItemType {
+		case 1:
+			addCoin += int64(p.Amount)
+		case 2:
+			item := new(ItemMaster)
+			for _, im := range getItemMasters() {
+				if im.ID == p.ItemID && im.ItemType == p.ItemType {
+					item = im
+					break
+				}
+			}
+			if item == nil {
+				return ErrItemNotFound
+			}
+
+			cID, err := h.generateID()
+			if err != nil {
+				return err
+			}
+			cards = append(cards, &UserCard{
+				ID:           cID,
+				UserID:       user.ID,
+				CardID:       item.ID,
+				AmountPerSec: *item.AmountPerSec,
+				Level:        1,
+				TotalExp:     0,
+				CreatedAt:    requestAt,
+				UpdatedAt:    requestAt,
+			})
+		case 3, 4:
+			itemPresents = append(itemPresents, p)
+		default:
+			return ErrInvalidItemType
+		}
+	}
+
+	if addCoin > 0 {
+		totalCoin := user.IsuCoin + addCoin
+		if _, err := tx.Exec("UPDATE users SET isu_coin=? WHERE id=?", totalCoin, user.ID); err != nil {
+			return err
+		}
+	}
+
+	if len(cards) > 0 {
+		bulkInsertUserCardQuery := "INSERT INTO user_cards(id, user_id, card_id, amount_per_sec, level, total_exp, created_at, updated_at) VALUES (:id, :user_id, :card_id, :amount_per_sec, :level, :total_exp, :created_at, :updated_at)"
+		if _, err := tx.NamedExec(bulkInsertUserCardQuery, cards); err != nil {
+			return err
+		}
+	}
+
+	if len(itemPresents) > 0 {
+		// check master exists
+		for _, p := range itemPresents {
+			item := new(ItemMaster)
+			for _, im := range getItemMasters() {
+				if im.ID == p.ItemID && im.ItemType == p.ItemType {
+					item = im
+					break
+				}
+			}
+			if item == nil {
+				return ErrItemNotFound
+			}
+		}
+
+		itemIDs := make([]int64, 0, len(itemPresents))
+		for _, p := range itemPresents {
+			itemIDs = append(itemIDs, p.ItemID)
+		}
+
+		var havingItems []UserItem
+		query, params, err := sqlx.In("SELECT * FROM user_items WHERE user_id=? AND item_id IN (?)", user.ID, itemIDs)
+		if err != nil {
+			return err
+		}
+		if err := tx.Select(&havingItems, query, params...); err != nil {
+			return err
+		}
+		havingItemMap := make(map[int64]*UserItem, len(havingItems))
+		for _, it := range havingItems {
+			havingItemMap[it.ItemID] = &it
+		}
+		items := make([]*UserItem, 0, len(itemPresents))
+		for _, p := range itemPresents {
+			if it, ok := havingItemMap[p.ItemID]; ok {
+				it.Amount += p.Amount
+				it.UpdatedAt = requestAt
+				items = append(items, it)
+			} else {
+				iID, err := h.generateID()
+				if err != nil {
+					return err
+				}
+				items = append(items, &UserItem{
+					ID:        iID,
+					UserID:    user.ID,
+					ItemID:    p.ItemID,
+					Amount:    p.Amount,
+					CreatedAt: requestAt,
+					UpdatedAt: requestAt,
+				})
+			}
+		}
+		if len(items) > 0 {
+			query := "INSERT INTO user_items(id, user_id, item_type, item_id, amount, created_at, updated_at) VALUES (:id, :user_id, :item_type, :item_id, :amount, :created_at, :updated_at) ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), item_type=VALUES(item_type), item_id=VALUES(item_id), amount=VALUES(amount), created_at=VALUES(created_at), updated_at=VALUES(updated_at)"
+			if _, err := tx.NamedExec(query, items); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
 // obtainItem アイテム付与処理
 func (h *Handler) obtainItem(tx *sqlx.Tx, userID, itemID int64, itemType int, obtainAmount int64, requestAt int64) ([]int64, []*UserCard, []*UserItem, error) {
 	obtainCoins := make([]int64, 0)
@@ -1374,6 +1494,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 	defer tx.Rollback() //nolint:errcheck
 
 	// 配布処理
+	presents := make([]*UserPresent, 0, len(obtainPresent))
 	for i := range obtainPresent {
 		if obtainPresent[i].DeletedAt != nil {
 			return errorResponse(c, http.StatusInternalServerError, fmt.Errorf("received present"))
@@ -1381,23 +1502,36 @@ func (h *Handler) receivePresent(c echo.Context) error {
 
 		obtainPresent[i].UpdatedAt = requestAt
 		obtainPresent[i].DeletedAt = &requestAt
-		v := obtainPresent[i]
-		query = "UPDATE user_presents SET deleted_at=?, updated_at=? WHERE id=?"
-		_, err := tx.Exec(query, requestAt, requestAt, v.ID)
-		if err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		presents = append(presents, obtainPresent[i])
+	}
 
-		_, _, _, err = h.obtainItem(tx, v.UserID, v.ItemID, v.ItemType, int64(v.Amount), requestAt)
-		if err != nil {
-			if err == ErrUserNotFound || err == ErrItemNotFound {
-				return errorResponse(c, http.StatusNotFound, err)
-			}
-			if err == ErrInvalidItemType {
-				return errorResponse(c, http.StatusBadRequest, err)
-			}
-			return errorResponse(c, http.StatusInternalServerError, err)
+	presentIDs := make([]int64, 0, len(presents))
+	for _, p := range presents {
+		presentIDs = append(presentIDs, p.ID)
+	}
+	bulkUpdateQuery, params, err := sqlx.In("UPDATE user_presents SET deleted_at = ?, updated_at = ? WHERE id in (?)", requestAt, requestAt, presentIDs)
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	if _, err := tx.Exec(bulkUpdateQuery, params...); err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+
+	user := new(User)
+	if err := tx.Get(user, "SELECT * FROM users WHERE id=?", userID); err != nil {
+		if err == sql.ErrNoRows {
+			return errorResponse(c, http.StatusNotFound, err)
 		}
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	if err := h.obtainItems(tx, user, requestAt, presents); err != nil {
+		if err == ErrUserNotFound || err == ErrItemNotFound {
+			return errorResponse(c, http.StatusNotFound, err)
+		}
+		if err == ErrInvalidItemType {
+			return errorResponse(c, http.StatusBadRequest, err)
+		}
+		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	err = tx.Commit()
