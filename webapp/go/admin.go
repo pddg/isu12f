@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/csv"
+	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -160,10 +162,7 @@ func (h *Handler) adminLogout(c echo.Context) error {
 // adminListMaster マスタデータ閲覧
 // GET /admin/master
 func (h *Handler) adminListMaster(c echo.Context) error {
-	masterVersions := make([]*VersionMaster, 0)
-	if err := h.DB.Select(&masterVersions, "SELECT * FROM version_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	masterVersions := getMasterVersions()
 
 	items := make([]*ItemMaster, 0)
 	if err := h.DB.Select(&items, "SELECT * FROM item_masters"); err != nil {
@@ -235,22 +234,28 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 	if versionMasterRecs != nil {
-		data := []map[string]interface{}{}
+		masterVersions := make([]*VersionMaster, 0, len(versionMasterRecs))
 		for i, v := range versionMasterRecs {
 			if i == 0 {
 				continue
 			}
-			data = append(data, map[string]interface{}{
-				"id":             v[0],
-				"status":         v[1],
-				"master_version": v[2],
+			id, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			status, err := strconv.ParseInt(v[1], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+
+			masterVersions = append(masterVersions, &VersionMaster{
+				ID:            id,
+				Status:        int(status),
+				MasterVersion: v[2],
 			})
 		}
 
-		query := "INSERT INTO version_masters(id, status, master_version) VALUES (:id, :status, :master_version) ON DUPLICATE KEY UPDATE status=VALUES(status), master_version=VALUES(master_version)"
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		cacheMasterVersions(masterVersions)
 	} else {
 		c.Logger().Debug("Skip Update Master: versionMaster")
 	}
@@ -478,8 +483,14 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 	}
 
 	activeMaster := new(VersionMaster)
-	if err = tx.Get(activeMaster, "SELECT * FROM version_masters WHERE status=1"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	for _, mv := range getMasterVersions() {
+		if mv.Status == 1 {
+			activeMaster = mv
+			break
+		}
+	}
+	if activeMaster == nil {
+		return errorResponse(c, http.StatusInternalServerError, errors.New("active master version not found"))
 	}
 
 	err = tx.Commit()

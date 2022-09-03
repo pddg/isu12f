@@ -163,13 +163,15 @@ func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		c.Set("requestTime", requestAt.Unix())
 
 		// マスタ確認
-		query := "SELECT * FROM version_masters WHERE status=1"
 		masterVersion := new(VersionMaster)
-		if err := h.DB.Get(masterVersion, query); err != nil {
-			if err == sql.ErrNoRows {
-				return errorResponse(c, http.StatusNotFound, fmt.Errorf("active master version is not found"))
+		for _, mv := range getMasterVersions() {
+			if mv.Status == 1 {
+				masterVersion = mv
+				break
 			}
-			return errorResponse(c, http.StatusInternalServerError, err)
+		}
+		if masterVersion == nil {
+			return errorResponse(c, http.StatusNotFound, fmt.Errorf("active master version is not found"))
 		}
 
 		if masterVersion.MasterVersion != c.Request().Header.Get("x-master-version") {
@@ -635,7 +637,7 @@ func (h *Handler) initialize(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	if err := resetCache(); err != nil {
+	if err := resetCache(h.DB); err != nil {
 		c.Logger().Errorf("Failed to reset cache: %v", err)
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -2175,13 +2177,24 @@ var (
 	sessionIDCacheByUserID  map[int64]string
 	sessionCacheBySessionID map[string]*Session
 	muSessionCache          sync.RWMutex
+
+	masterVersions   []*VersionMaster
+	muMasterVersions sync.RWMutex
 )
 
-func resetCache() error {
+func resetCache(db *sqlx.DB) error {
 	muSessionCache.Lock()
 	defer muSessionCache.Unlock()
 	sessionIDCacheByUserID = make(map[int64]string, 10000)
 	sessionCacheBySessionID = make(map[string]*Session, 10000)
+
+	muMasterVersions.Lock()
+	defer muMasterVersions.Unlock()
+	var allMasterVersions []*VersionMaster
+	if err := db.Select(&allMasterVersions, "SELECT * FROM version_masters"); err != nil {
+		return err
+	}
+	masterVersions = allMasterVersions
 
 	return nil
 }
@@ -2214,4 +2227,26 @@ func clearUserSession(sess *Session) {
 	defer muSessionCache.Unlock()
 	delete(sessionIDCacheByUserID, sess.UserID)
 	delete(sessionCacheBySessionID, sess.SessionID)
+}
+
+func getMasterVersions() []*VersionMaster {
+	muMasterVersions.RLock()
+	defer muMasterVersions.RUnlock()
+	return masterVersions
+}
+
+func cacheMasterVersions(masters []*VersionMaster) {
+	muMasterVersions.Lock()
+	defer muMasterVersions.Unlock()
+	masterByID := make(map[int64]*VersionMaster, len(masterVersions)+len(masters))
+	for _, mv := range masterVersions {
+		masterByID[mv.ID] = mv
+	}
+	for _, mv := range masters {
+		masterByID[mv.ID] = mv
+	}
+	masterVersions = make([]*VersionMaster, 0, len(masterByID))
+	for _, mv := range masterByID {
+		masterVersions = append(masterVersions, mv)
+	}
 }
