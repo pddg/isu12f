@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -967,11 +968,14 @@ func (h *Handler) listGacha(c echo.Context) error {
 	}
 
 	gachaMasterList := []*GachaMaster{}
-	query := "SELECT * FROM gacha_masters WHERE start_at <= ? AND end_at >= ? ORDER BY display_order ASC"
-	err = h.DB.Select(&gachaMasterList, query, requestAt, requestAt)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	for _, gm := range getGachaMasters() {
+		if gm.StartAt <= requestAt && gm.EndAt >= requestAt {
+			gachaMasterList = append(gachaMasterList, gm)
+		}
 	}
+	sort.Slice(gachaMasterList, func(i, j int) bool {
+		return gachaMasterList[i].DisplayOrder < gachaMasterList[j].DisplayOrder
+	})
 
 	if len(gachaMasterList) == 0 {
 		return successResponse(c, &ListGachaResponse{
@@ -981,7 +985,7 @@ func (h *Handler) listGacha(c echo.Context) error {
 
 	// ガチャ排出アイテム取得
 	gachaDataList := make([]*GachaData, 0)
-	query = "SELECT * FROM gacha_item_masters WHERE gacha_id=? ORDER BY id ASC"
+	query := "SELECT * FROM gacha_item_masters WHERE gacha_id=? ORDER BY id ASC"
 	for _, v := range gachaMasterList {
 		var gachaItem []*GachaItemMaster
 		err = h.DB.Select(&gachaItem, query, v.ID)
@@ -1104,19 +1108,19 @@ func (h *Handler) drawGacha(c echo.Context) error {
 	}
 
 	// gachaIDからガチャマスタの取得
-	var args []interface{}
-	query = "SELECT * FROM gacha_masters WHERE id=? AND start_at <= ? AND end_at >= ?"
-	args = []interface{}{gachaID, requestAt, requestAt}
-	if gachaID == "37" && h.use37() {
-		query = "SELECT * FROM gacha_masters WHERE id=? AND start_at <= ?"
-		args = []interface{}{gachaID, requestAt}
-	}
 	gachaInfo := new(GachaMaster)
-	if err = h.DB.Get(gachaInfo, query, args...); err != nil {
-		if sql.ErrNoRows == err {
-			return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha"))
+	for _, gm := range getGachaMasters() {
+		if gm.ID == 37 && h.use37() && gm.StartAt <= requestAt {
+			gachaInfo = gm
+			break
 		}
-		return errorResponse(c, http.StatusInternalServerError, err)
+		if fmt.Sprintf("%d", gm.ID) == gachaID && gm.StartAt <= requestAt && gm.EndAt >= requestAt {
+			gachaInfo = gm
+			break
+		}
+	}
+	if gachaInfo == nil {
+		return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha"))
 	}
 
 	// gachaItemMasterからアイテムリスト取得
@@ -2203,6 +2207,12 @@ var (
 
 	itemMasters   []*ItemMaster
 	muItemMasters sync.RWMutex
+
+	gachaMasters   []*GachaMaster
+	muGachaMasters sync.RWMutex
+
+	gachaItemMasters   []*GachaItemMaster
+	muGachaItemMasters sync.RWMutex
 )
 
 func resetCache(db *sqlx.DB) error {
@@ -2226,6 +2236,22 @@ func resetCache(db *sqlx.DB) error {
 		return err
 	}
 	itemMasters = allItemMasters
+
+	muGachaMasters.Lock()
+	defer muGachaMasters.Unlock()
+	var allGachaMasters []*GachaMaster
+	if err := db.Select(&allGachaMasters, "SELECT * FROM gacha_masters"); err != nil {
+		return err
+	}
+	gachaMasters = allGachaMasters
+
+	muGachaItemMasters.Lock()
+	defer muGachaItemMasters.Unlock()
+	var allGachaItemMasters []*GachaItemMaster
+	if err := db.Select(&allGachaItemMasters, "SELECT * FROM gacha_item_masters"); err != nil {
+		return err
+	}
+	gachaItemMasters = allGachaItemMasters
 
 	return nil
 }
@@ -2301,5 +2327,27 @@ func cacheItemMasters(masters []*ItemMaster) {
 	itemMasters = make([]*ItemMaster, 0, len(itemMap))
 	for _, item := range itemMap {
 		itemMasters = append(itemMasters, item)
+	}
+}
+
+func getGachaMasters() []*GachaMaster {
+	muGachaMasters.RLock()
+	defer muGachaMasters.RUnlock()
+	return gachaMasters
+}
+
+func cacheGachaMasters(masters []*GachaMaster) {
+	muGachaMasters.Lock()
+	defer muGachaMasters.Unlock()
+	gachaMap := make(map[int64]*GachaMaster, len(gachaMasters)+len(masters))
+	for _, gacha := range gachaMasters {
+		gachaMap[gacha.ID] = gacha
+	}
+	for _, gacha := range masters {
+		gachaMap[gacha.ID] = gacha
+	}
+	gachaMasters = make([]*GachaMaster, 0, len(gachaMap))
+	for _, gacha := range gachaMap {
+		gachaMasters = append(gachaMasters, gacha)
 	}
 }

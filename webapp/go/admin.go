@@ -166,10 +166,7 @@ func (h *Handler) adminListMaster(c echo.Context) error {
 
 	items := getItemMasters()
 
-	gachas := make([]*GachaMaster, 0)
-	if err := h.DB.Select(&gachas, "SELECT * FROM gacha_masters"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	gachas := getGachaMasters()
 
 	gachaItems := make([]*GachaItemMaster, 0)
 	if err := h.DB.Select(&gachaItems, "SELECT * FROM gacha_item_masters"); err != nil {
@@ -350,29 +347,46 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 	if gachaRecs != nil {
-		data := []map[string]interface{}{}
+		gachaMasters := make([]*GachaMaster, 0, len(gachaRecs))
 		for i, v := range gachaRecs {
 			if i == 0 {
 				continue
 			}
-			data = append(data, map[string]interface{}{
-				"id":            v[0],
-				"name":          v[1],
-				"start_at":      v[2],
-				"end_at":        v[3],
-				"display_order": v[4],
-				"created_at":    v[5],
+
+			id, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+
+			startAt, err := strconv.ParseInt(v[2], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			endAt, err := strconv.ParseInt(v[3], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			displayOrder, err := strconv.ParseInt(v[4], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+			createdAt, err := strconv.ParseInt(v[5], 10, 64)
+			if err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+
+			gachaMasters = append(gachaMasters, &GachaMaster{
+				ID:           id,
+				Name:         v[1],
+				StartAt:      startAt,
+				EndAt:        endAt,
+				DisplayOrder: int(displayOrder),
+				CreatedAt:    createdAt,
 			})
 		}
 
-		query := strings.Join([]string{
-			"INSERT INTO gacha_masters(id, name, start_at, end_at, display_order, created_at)",
-			"VALUES (:id, :name, :start_at, :end_at, :display_order, :created_at)",
-			"ON DUPLICATE KEY UPDATE name=VALUES(name), start_at=VALUES(start_at), end_at=VALUES(end_at), display_order=VALUES(display_order), created_at=VALUES(created_at)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		cacheGachaMasters(gachaMasters)
+
 	} else {
 		c.Logger().Debug("Skip Update Master: gachaMaster")
 	}
