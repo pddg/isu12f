@@ -470,18 +470,30 @@ func (h *Handler) obtainPresent(tx *sqlx.Tx, userID int64, requestAt int64) ([]*
 		}
 	}
 
-	// 全員プレゼント取得情報更新
-	obtainPresents := make([]*UserPresent, 0)
+	presentAllIDs := make([]int64, 0, len(normalPresents))
 	for _, np := range normalPresents {
-		received := new(UserPresentAllReceivedHistory)
-		query := "SELECT * FROM user_present_all_received_history WHERE user_id=? AND present_all_id=?"
-		err := tx.Get(received, query, userID, np.ID)
-		if err == nil {
-			// プレゼント配布済
+		presentAllIDs = append(presentAllIDs, np.ID)
+	}
+	var receivedHistories []*UserPresentAllReceivedHistory
+	query, args, err := sqlx.In("SELECT * FROM user_present_all_received_history WHERE user_id=? AND present_all_id IN (?)", userID, presentAllIDs)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Select(&receivedHistories, query, args...); err != nil {
+		return nil, err
+	}
+	receivedHistoryMap := make(map[int64]*UserPresentAllReceivedHistory, len(receivedHistories))
+	for _, h := range receivedHistories {
+		receivedHistoryMap[h.PresentAllID] = h
+	}
+
+	// 全員プレゼント取得情報更新
+	obtainPresents := make([]*UserPresent, 0, len(normalPresents))
+	newHistories := make([]*UserPresentAllReceivedHistory, 0, len(normalPresents))
+	for _, np := range normalPresents {
+		// プレゼント配布済
+		if _, ok := receivedHistoryMap[np.ID]; ok {
 			continue
-		}
-		if err != sql.ErrNoRows {
-			return nil, err
 		}
 
 		// user present boxに入れる
@@ -500,10 +512,6 @@ func (h *Handler) obtainPresent(tx *sqlx.Tx, userID int64, requestAt int64) ([]*
 			CreatedAt:      requestAt,
 			UpdatedAt:      requestAt,
 		}
-		query = "INSERT INTO user_presents(id, user_id, sent_at, item_type, item_id, amount, present_message, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-		if _, err := tx.Exec(query, up.ID, up.UserID, up.SentAt, up.ItemType, up.ItemID, up.Amount, up.PresentMessage, up.CreatedAt, up.UpdatedAt); err != nil {
-			return nil, err
-		}
 
 		// historyに入れる
 		phID, err := h.generateID()
@@ -518,20 +526,23 @@ func (h *Handler) obtainPresent(tx *sqlx.Tx, userID int64, requestAt int64) ([]*
 			CreatedAt:    requestAt,
 			UpdatedAt:    requestAt,
 		}
-		query = "INSERT INTO user_present_all_received_history(id, user_id, present_all_id, received_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
-		if _, err := tx.Exec(
-			query,
-			history.ID,
-			history.UserID,
-			history.PresentAllID,
-			history.ReceivedAt,
-			history.CreatedAt,
-			history.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
+		newHistories = append(newHistories, history)
 
 		obtainPresents = append(obtainPresents, up)
+	}
+
+	if len(obtainPresents) > 0 {
+		queryBulkInsertPresents := "INSERT INTO user_presents(id, user_id, sent_at, item_type, item_id, amount, present_message, created_at, updated_at) VALUES (:id, :user_id, :sent_at, :item_type, :item_id, :amount, :present_message, :created_at, :updated_at)"
+		if _, err := tx.NamedExec(queryBulkInsertPresents, obtainPresents); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(newHistories) > 0 {
+		queryBulkInsertHistories := "INSERT INTO user_present_all_received_history(id, user_id, present_all_id, received_at, created_at, updated_at) VALUES (:id, :user_id, :present_all_id, :received_at, :created_at, :updated_at)"
+		if _, err := tx.NamedExec(queryBulkInsertHistories, newHistories); err != nil {
+			return nil, err
+		}
 	}
 
 	return obtainPresents, nil
