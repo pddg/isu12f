@@ -739,11 +739,6 @@ func (h *Handler) adminBanUser(c echo.Context) error {
 		return errorResponse(c, http.StatusBadRequest, err)
 	}
 
-	requestAt, err := getRequestTime(c)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
-	}
-
 	query := "SELECT * FROM users WHERE id=?"
 	user := new(User)
 	if err = h.getUserDB(userID).Get(user, query, userID); err != nil {
@@ -753,14 +748,7 @@ func (h *Handler) adminBanUser(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	banID, err := h.generateID()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	query = "INSERT user_bans(id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE updated_at = ?"
-	if _, err = h.getUserDB(userID).Exec(query, banID, userID, requestAt, requestAt, requestAt); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	cacheUserBan(user.ID)
 
 	return successResponse(c, &AdminBanUserResponse{
 		User: user,
