@@ -199,12 +199,6 @@ type AdminListMasterResponse struct {
 // adminUpdateMaster マスタデータ更新
 // PUT /admin/master
 func (h *Handler) adminUpdateMaster(c echo.Context) error {
-	tx, err := h.DB.Beginx()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
 	// version master
 	versionMasterRecs, err := readFormFileToCSV(c, "versionMaster")
 	if err != nil {
@@ -616,11 +610,6 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 	}
 	if activeMaster == nil {
 		return errorResponse(c, http.StatusInternalServerError, errors.New("active master version not found"))
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	return successResponse(c, &AdminUpdateMasterResponse{
