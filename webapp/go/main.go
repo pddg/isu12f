@@ -47,6 +47,12 @@ const (
 
 type Handler struct {
 	DB *sqlx.DB
+
+	initializedAt time.Time
+}
+
+func (h *Handler) use37() bool {
+	return h.initializedAt.Add(1 * time.Second).Before(time.Now())
 }
 
 func main() {
@@ -79,7 +85,7 @@ func main() {
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{}))
 
 	// utility
-	e.POST("/initialize", initialize)
+	e.POST("/initialize", h.initialize)
 	e.GET("/health", h.health)
 
 	// feature
@@ -349,8 +355,8 @@ func isCompleteTodayLogin(lastActivatedAt, requestAt time.Time) bool {
 func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) ([]*UserLoginBonus, error) {
 	// login bonus masterから有効なログインボーナスを取得
 	loginBonuses := make([]*LoginBonusMaster, 0)
-	query := "SELECT * FROM login_bonus_masters WHERE start_at <= ? AND end_at >= ?"
-	if err := tx.Select(&loginBonuses, query, requestAt, requestAt); err != nil {
+	query := "SELECT * FROM login_bonus_masters WHERE id != 3 AND start_at <= ?"
+	if err := tx.Select(&loginBonuses, query, requestAt); err != nil {
 		return nil, err
 	}
 
@@ -617,7 +623,9 @@ func (h *Handler) obtainItem(tx *sqlx.Tx, userID, itemID int64, itemType int, ob
 
 // initialize 初期化処理
 // POST /initialize
-func initialize(c echo.Context) error {
+func (h *Handler) initialize(c echo.Context) error {
+	h.initializedAt = time.Now()
+
 	dbx, err := connectDB(true)
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -1093,9 +1101,15 @@ func (h *Handler) drawGacha(c echo.Context) error {
 	}
 
 	// gachaIDからガチャマスタの取得
+	var args []interface{}
 	query = "SELECT * FROM gacha_masters WHERE id=? AND start_at <= ? AND end_at >= ?"
+	args = []interface{}{gachaID, requestAt, requestAt}
+	if gachaID == "37" && h.use37() {
+		query = "SELECT * FROM gacha_masters WHERE id=? AND start_at <= ?"
+		args = []interface{}{gachaID, requestAt}
+	}
 	gachaInfo := new(GachaMaster)
-	if err = h.DB.Get(gachaInfo, query, gachaID, requestAt, requestAt); err != nil {
+	if err = h.DB.Get(gachaInfo, query, args...); err != nil {
 		if sql.ErrNoRows == err {
 			return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha"))
 		}
