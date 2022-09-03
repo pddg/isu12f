@@ -17,3 +17,9 @@
     name: mysql
     daemon_reload: yes
     state: restarted
+
+- name: MySQL must be started
+  become: yes
+  systemd:
+    name: mysql
+    state: started
