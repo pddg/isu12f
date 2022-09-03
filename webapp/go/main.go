@@ -355,9 +355,10 @@ func isCompleteTodayLogin(lastActivatedAt, requestAt time.Time) bool {
 func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) ([]*UserLoginBonus, error) {
 	// login bonus masterから有効なログインボーナスを取得
 	loginBonuses := make([]*LoginBonusMaster, 0)
-	query := "SELECT * FROM login_bonus_masters WHERE id != 3 AND start_at <= ?"
-	if err := tx.Select(&loginBonuses, query, requestAt); err != nil {
-		return nil, err
+	for _, lb := range getLoginBonusMasters() {
+		if lb.ID != 3 && lb.StartAt <= requestAt {
+			loginBonuses = append(loginBonuses, lb)
+		}
 	}
 
 	sendLoginBonuses := make([]*UserLoginBonus, 0)
@@ -366,7 +367,7 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, userID int64, requestAt int64) (
 		initBonus := false
 		// ボーナスの進捗取得
 		userBonus := new(UserLoginBonus)
-		query = "SELECT * FROM user_login_bonuses WHERE user_id=? AND login_bonus_id=?"
+		query := "SELECT * FROM user_login_bonuses WHERE user_id=? AND login_bonus_id=?"
 		if err := tx.Get(userBonus, query, userID, bonus.ID); err != nil {
 			if err != sql.ErrNoRows {
 				return nil, err
@@ -2440,5 +2441,27 @@ func cachePresentAllMasters(masters []*PresentAllMaster) {
 	presentAllMasters = make([]*PresentAllMaster, 0, len(presentMap))
 	for _, p := range presentMap {
 		presentAllMasters = append(presentAllMasters, p)
+	}
+}
+
+func getLoginBonusMasters() []*LoginBonusMaster {
+	muLoginBonusMasters.RLock()
+	defer muLoginBonusMasters.RUnlock()
+	return loginBonusMasters
+}
+
+func cacheLoginBonusMasters(masters []*LoginBonusMaster) {
+	muLoginBonusMasters.Lock()
+	defer muLoginBonusMasters.Unlock()
+	loginBonusMap := make(map[int64]*LoginBonusMaster, len(loginBonusMasters)+len(masters))
+	for _, lb := range loginBonusMasters {
+		loginBonusMap[lb.ID] = lb
+	}
+	for _, lb := range masters {
+		loginBonusMap[lb.ID] = lb
+	}
+	loginBonusMasters = make([]*LoginBonusMaster, 0, len(loginBonusMap))
+	for _, lb := range loginBonusMap {
+		loginBonusMasters = append(loginBonusMasters, lb)
 	}
 }
