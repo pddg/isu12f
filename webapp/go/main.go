@@ -622,7 +622,6 @@ func (h *Handler) obtainItem(tx *sqlx.Tx, userID, itemID int64, itemType int, ob
 // POST /initialize
 func (h *Handler) initialize(c echo.Context) error {
 	rand.Seed(time.Now().UnixNano())
-	h.initializedAt = time.Now()
 
 	dbx, err := connectDB(true)
 	if err != nil {
@@ -643,6 +642,7 @@ func (h *Handler) initialize(c echo.Context) error {
 
 	runtime.GC()
 
+	h.initializedAt = time.Now()
 	return successResponse(c, &InitializeResponse{
 		Language: "go",
 	})
