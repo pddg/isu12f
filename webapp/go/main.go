@@ -594,14 +594,7 @@ func (h *Handler) obtainItems(tx *sqlx.Tx, user *User, requestAt int64, presents
 			itemIDs = append(itemIDs, p.ItemID)
 		}
 
-		var havingItems []*UserItem
-		query, params, err := sqlx.In("SELECT * FROM user_items WHERE user_id=? AND item_id IN (?)", user.ID, itemIDs)
-		if err != nil {
-			return err
-		}
-		if err := tx.Select(&havingItems, query, params...); err != nil {
-			return err
-		}
+		havingItems := batchGetUserItemsByItemIDs(user.ID, itemIDs)
 		havingItemMap := make(map[int64]*UserItem, len(havingItems))
 		for _, it := range havingItems {
 			havingItemMap[it.ItemID] = it
@@ -628,10 +621,7 @@ func (h *Handler) obtainItems(tx *sqlx.Tx, user *User, requestAt int64, presents
 			}
 		}
 		if len(items) > 0 {
-			query := "INSERT INTO user_items(id, user_id, item_type, item_id, amount, created_at, updated_at) VALUES (:id, :user_id, :item_type, :item_id, :amount, :created_at, :updated_at) ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), item_type=VALUES(item_type), item_id=VALUES(item_id), amount=VALUES(amount), created_at=VALUES(created_at), updated_at=VALUES(updated_at)"
-			if _, err := tx.NamedExec(query, items); err != nil {
-				return err
-			}
+			bulkUpsertUserItems(user.ID, items)
 		}
 	}
 
@@ -1375,11 +1365,7 @@ func (h *Handler) listItem(c echo.Context) error {
 		return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
 	}
 
-	itemList := []*UserItem{}
-	query := "SELECT * FROM user_items WHERE user_id = ?"
-	if err = h.getUserDB(userID).Select(&itemList, query, userID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	itemList := getAllUserItemsByUser(userID)
 
 	cardList := getAllUserCardsByUser(userID)
 
@@ -1491,13 +1477,18 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 	for _, item := range req.Items {
 		itemIDs = append(itemIDs, item.ID)
 	}
-	var items []*ConsumeUserItemData
-	query, param, err := sqlx.In("SELECT id, user_id, item_id, item_type, amount, created_at, updated_at FROM user_items WHERE item_type = 3 AND user_id = ? AND id IN (?)", userID, itemIDs)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	if err := h.getUserDB(userID).Select(&items, query, param...); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+	userItems := batchGetType3UserItemsByIDs(userID, itemIDs)
+	items := make([]*ConsumeUserItemData, 0, len(userItems))
+	for _, ui := range userItems {
+		items = append(items, &ConsumeUserItemData{
+			ID:        ui.ID,
+			UserID:    ui.UserID,
+			ItemID:    ui.ItemID,
+			ItemType:  ui.ItemType,
+			Amount:    ui.Amount,
+			CreatedAt: ui.CreatedAt,
+			UpdatedAt: ui.UpdatedAt,
+		})
 	}
 	itemMap := make(map[int64]*ConsumeUserItemData, len(items))
 	for _, it := range items {
@@ -1556,11 +1547,8 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 	userCard.UpdatedAt = requestAt
 	updateUserCard(userID, userCard)
 
-	query = "UPDATE user_items SET amount=?, updated_at=? WHERE id=?"
 	for _, v := range items {
-		if _, err = tx.Exec(query, v.Amount-v.ConsumeAmount, requestAt, v.ID); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		updateUserItem(userID, v.ID, v.Amount-v.ConsumeAmount, requestAt)
 	}
 
 	// get response data
@@ -2137,6 +2125,9 @@ var (
 	userDevices   map[int64]map[string]*UserDevice
 	muUserDevices sync.RWMutex
 
+	userItems   map[int64][]*UserItem
+	muUserItems sync.RWMutex
+
 	userCards   map[int64][]*UserCard
 	muUserCards sync.RWMutex
 
@@ -2204,6 +2195,20 @@ func resetCache(db *sqlx.DB) error {
 			userDevices[ud.UserID] = make(map[string]*UserDevice, 4)
 		}
 		userDevices[ud.UserID][ud.PlatformID] = ud
+	}
+
+	muUserItems.Lock()
+	defer muUserItems.Unlock()
+	userItems = make(map[int64][]*UserItem, 10000)
+	var allUserItems []*UserItem
+	if err := db.Select(&allUserItems, "SELECT * FROM user_items"); err != nil {
+		return err
+	}
+	for _, ui := range allUserItems {
+		if _, ok := userItems[ui.UserID]; !ok {
+			userItems[ui.UserID] = make([]*UserItem, 0, 40)
+		}
+		userItems[ui.UserID] = append(userItems[ui.UserID], ui)
 	}
 
 	muUserCards.Lock()
@@ -2402,6 +2407,68 @@ func cacheUserDevice(device *UserDevice) {
 		userDevices[device.UserID] = make(map[string]*UserDevice, 4)
 	}
 	userDevices[device.UserID][device.PlatformID] = device
+}
+
+func getAllUserItemsByUser(userID int64) []*UserItem {
+	muUserItems.RLock()
+	defer muUserItems.RUnlock()
+	return userItems[userID]
+}
+
+func batchGetUserItemsByItemIDs(userID int64, itemIDs []int64) []*UserItem {
+	muUserItems.RLock()
+	defer muUserItems.RUnlock()
+	ret := make([]*UserItem, 0, len(itemIDs))
+	for _, ui := range userItems[userID] {
+		for _, itemID := range itemIDs {
+			if ui.ItemID == itemID {
+				ret = append(ret, ui)
+			}
+		}
+	}
+	return ret
+}
+
+func batchGetType3UserItemsByIDs(userID int64, ids []int64) []*UserItem {
+	muUserItems.RLock()
+	defer muUserItems.RUnlock()
+	ret := make([]*UserItem, 0, len(ids))
+	for _, ui := range userItems[userID] {
+		for _, id := range ids {
+			if ui.ID == id && ui.ItemType == 3 {
+				ret = append(ret, ui)
+			}
+		}
+	}
+	return ret
+}
+
+func updateUserItem(userID int64, id int64, amount int, updatedAt int64) {
+	muUserItems.Lock()
+	defer muUserItems.Unlock()
+	for _, ui := range userItems[userID] {
+		if ui.ID == id {
+			ui.Amount = amount
+			ui.UpdatedAt = updatedAt
+			return
+		}
+	}
+}
+
+func bulkUpsertUserItems(userID int64, items []*UserItem) {
+	muUserItems.Lock()
+	defer muUserItems.Unlock()
+	itemMap := make(map[int64]*UserItem, len(items)+len(userItems[userID]))
+	for _, ui := range userItems[userID] {
+		itemMap[ui.ID] = ui
+	}
+	for _, ui := range items {
+		itemMap[ui.ID] = ui
+	}
+	userItems[userID] = make([]*UserItem, 0, len(itemMap))
+	for _, ui := range itemMap {
+		userItems[userID] = append(userItems[userID], ui)
+	}
 }
 
 func getAllUserCardsByUser(userID int64) []*UserCard {

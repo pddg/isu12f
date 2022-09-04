@@ -669,11 +669,7 @@ func (h *Handler) adminUser(c echo.Context) error {
 
 	decks := getAllUserDeckByUser(userID)
 
-	query = "SELECT * FROM user_items WHERE user_id=?"
-	items := make([]*UserItem, 0)
-	if err = h.getUserDB(userID).Select(&items, query, userID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	items := getAllUserItemsByUser(userID)
 
 	loginBonuses := getAllUserLoginBonusByUser(userID)
 
