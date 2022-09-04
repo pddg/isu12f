@@ -2089,6 +2089,10 @@ var (
 	sessionCacheBySessionID map[string]*Session
 	muSessionCache          sync.RWMutex
 
+	adminSessionIDCacheByUserID  map[int64]string
+	adminSessionCacheBySessionID map[string]*Session
+	muAdminSessionCache          sync.RWMutex
+
 	users   map[int64]*User
 	muUsers sync.RWMutex
 
@@ -2144,6 +2148,11 @@ func resetCache(db *sqlx.DB) error {
 	defer muSessionCache.Unlock()
 	sessionIDCacheByUserID = make(map[int64]string, 10000)
 	sessionCacheBySessionID = make(map[string]*Session, 10000)
+
+	muAdminSessionCache.Lock()
+	defer muAdminSessionCache.Unlock()
+	adminSessionIDCacheByUserID = make(map[int64]string, 100)
+	adminSessionCacheBySessionID = make(map[string]*Session, 100)
 
 	muUsers.Lock()
 	defer muUsers.Unlock()
@@ -2354,6 +2363,45 @@ func clearUserSession(sess *Session) {
 	defer muSessionCache.Unlock()
 	delete(sessionIDCacheByUserID, sess.UserID)
 	delete(sessionCacheBySessionID, sess.SessionID)
+}
+
+func getAdminSessionBySessionID(sessID string) (*Session, bool) {
+	muAdminSessionCache.RLock()
+	defer muAdminSessionCache.RUnlock()
+	sess, ok := adminSessionCacheBySessionID[sessID]
+	if !ok {
+		return nil, false
+	}
+	if sess == nil {
+		return nil, false
+	}
+	return sess, true
+}
+
+func updateAdminSession(sess *Session) {
+	muAdminSessionCache.Lock()
+	defer muAdminSessionCache.Unlock()
+	if oldSessionID, ok := adminSessionIDCacheByUserID[sess.UserID]; ok {
+		delete(adminSessionCacheBySessionID, oldSessionID)
+	}
+	adminSessionIDCacheByUserID[sess.UserID] = sess.SessionID
+	adminSessionCacheBySessionID[sess.SessionID] = sess
+}
+
+func clearAdminSession(sess *Session) {
+	muAdminSessionCache.Lock()
+	defer muAdminSessionCache.Unlock()
+	delete(adminSessionIDCacheByUserID, sess.UserID)
+	delete(adminSessionCacheBySessionID, sess.SessionID)
+}
+
+func clearAdminSessionBySessionID(sessionID string) {
+	muAdminSessionCache.Lock()
+	defer muAdminSessionCache.Unlock()
+	if sess, ok := adminSessionCacheBySessionID[sessionID]; ok {
+		delete(adminSessionIDCacheByUserID, sess.UserID)
+	}
+	delete(adminSessionCacheBySessionID, sessionID)
 }
 
 func getUser(userID int64) *User {
