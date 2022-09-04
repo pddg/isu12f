@@ -60,7 +60,7 @@ type Handler struct {
 }
 
 func (h *Handler) use37() bool {
-	return h.initializedAt.Add(1 * time.Second).Before(time.Now())
+	return h.initializedAt.Add(700 * time.Millisecond).Before(time.Now())
 }
 
 func (h *Handler) getUserDB(userID int64) *sqlx.DB {
