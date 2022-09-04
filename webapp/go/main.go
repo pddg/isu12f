@@ -881,12 +881,6 @@ func (h *Handler) login(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	tx, err := h.getUserDB(user.ID).Beginx()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
 	// sessionを更新
 	sID, err := h.generateID()
 	if err != nil {
@@ -913,17 +907,18 @@ func (h *Handler) login(c echo.Context) error {
 
 		cacheUser(user)
 
-		err = tx.Commit()
-		if err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
-
 		return successResponse(c, &LoginResponse{
 			ViewerID:         req.ViewerID,
 			SessionID:        sess.SessionID,
 			UpdatedResources: makeUpdatedResources(requestAt, user, nil, nil, nil, nil, nil, nil),
 		})
 	}
+
+	tx, err := h.getUserDB(user.ID).Beginx()
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	defer tx.Rollback() //nolint:errcheck
 
 	// login process
 	user, loginBonuses, presents, err := h.loginProcess(tx, req.UserID, requestAt)
@@ -1166,12 +1161,6 @@ func (h *Handler) drawGacha(c echo.Context) error {
 		}
 	}
 
-	tx, err := h.getUserDB(userID).Beginx()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
 	// 直付与 => プレゼントに入れる
 	presents := make([]*UserPresent, 0, gachaCount)
 	for _, v := range result {
@@ -1194,18 +1183,13 @@ func (h *Handler) drawGacha(c echo.Context) error {
 	}
 
 	query := "INSERT INTO user_presents(id, user_id, sent_at, item_type, item_id, amount, present_message, created_at, updated_at) VALUES (:id, :user_id, :sent_at, :item_type, :item_id, :amount, :present_message, :created_at, :updated_at)"
-	if _, err := tx.NamedExec(query, presents); err != nil {
+	if _, err := h.getUserDB(userID).NamedExec(query, presents); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	// isuconをへらす
 	user.IsuCoin -= consumedCoin
 	cacheUser(user)
-
-	err = tx.Commit()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
 
 	return successResponse(c, &DrawGachaResponse{
 		Presents: presents,
@@ -1704,13 +1688,6 @@ func (h *Handler) updateDeck(c echo.Context) error {
 		return errorResponse(c, http.StatusBadRequest, fmt.Errorf("invalid card ids"))
 	}
 
-	tx, err := h.getUserDB(userID).Beginx()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
-	defer tx.Rollback() //nolint:errcheck
-
 	// update data
 	udID, err := h.generateID()
 	if err != nil {
@@ -1726,11 +1703,6 @@ func (h *Handler) updateDeck(c echo.Context) error {
 		UpdatedAt: requestAt,
 	}
 	cacheNewUserDeck(newDeck)
-
-	err = tx.Commit()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
 
 	return successResponse(c, &UpdateDeckResponse{
 		UpdatedResources: makeUpdatedResources(requestAt, nil, nil, nil, []*UserDeck{newDeck}, nil, nil, nil),
