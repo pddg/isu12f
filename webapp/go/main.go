@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"runtime"
 	"sort"
 	"strconv"
 	"sync"
@@ -644,8 +643,6 @@ func (h *Handler) initialize(c echo.Context) error {
 		c.Logger().Errorf("Failed to reset cache: %v", err)
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-
-	runtime.GC()
 
 	h.initializedAt = time.Now()
 	return successResponse(c, &InitializeResponse{
