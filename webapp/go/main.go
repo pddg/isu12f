@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1488,19 +1487,28 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 	}
 
 	// 消費アイテムの所持チェック
-	items := make([]*ConsumeUserItemData, 0)
-	query := `
-	SELECT ui.id, ui.user_id, ui.item_id, ui.item_type, ui.amount, ui.created_at, ui.updated_at
-	FROM user_items as ui
-	WHERE ui.item_type = 3 AND ui.id=? AND ui.user_id=?
-	`
+	itemIDs := make([]int64, 0, len(req.Items))
+	for _, item := range req.Items {
+		itemIDs = append(itemIDs, item.ID)
+	}
+	var items []*ConsumeUserItemData
+	query, param, err := sqlx.In("SELECT id, user_id, item_id, item_type, amount, created_at, updated_at FROM user_items WHERE item_type = 3 AND user_id = ? AND id IN (?)", userID, itemIDs)
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	if err := h.getUserDB(userID).Select(&items, query, param...); err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	itemMap := make(map[int64]*ConsumeUserItemData, len(items))
+	for _, it := range items {
+		itemMap[it.ID] = it
+	}
+
+	items = make([]*ConsumeUserItemData, 0, len(req.Items))
 	for _, v := range req.Items {
-		item := new(ConsumeUserItemData)
-		if err = h.getUserDB(userID).Get(item, query, v.ID, userID); err != nil {
-			if err == sql.ErrNoRows {
-				return errorResponse(c, http.StatusNotFound, err)
-			}
-			return errorResponse(c, http.StatusInternalServerError, err)
+		item, ok := itemMap[v.ID]
+		if !ok {
+			return errorResponse(c, http.StatusNotFound, errors.New("item not found"))
 		}
 		for _, im := range allItemMasters {
 			if item.ItemID == im.ID {
