@@ -312,7 +312,7 @@ func (h *Handler) loginProcess(tx *sqlx.Tx, userID int64, requestAt int64) (*Use
 	}
 
 	// ログインボーナス処理
-	loginBonuses, err := h.obtainLoginBonus(tx, user, requestAt)
+	loginBonuses, err := h.obtainLoginBonus(user, requestAt)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -344,7 +344,7 @@ func isCompleteTodayLogin(lastActivatedAt, requestAt time.Time) bool {
 }
 
 // obtainLoginBonus
-func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, user *User, requestAt int64) ([]*UserLoginBonus, error) {
+func (h *Handler) obtainLoginBonus(user *User, requestAt int64) ([]*UserLoginBonus, error) {
 	// login bonus masterから有効なログインボーナスを取得
 	loginBonuses := make([]*LoginBonusMaster, 0)
 	for _, lb := range getLoginBonusMasters() {
@@ -425,7 +425,7 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, user *User, requestAt int64) ([]
 
 		sendLoginBonuses = append(sendLoginBonuses, userBonus)
 	}
-	if err := h.obtainItems(tx, user, requestAt, rewardItems); err != nil {
+	if err := h.obtainItems(user, requestAt, rewardItems); err != nil {
 		return nil, err
 	}
 
@@ -513,7 +513,7 @@ func (h *Handler) obtainPresent(tx *sqlx.Tx, userID int64, requestAt int64) ([]*
 	return obtainPresents, nil
 }
 
-func (h *Handler) obtainItems(tx *sqlx.Tx, user *User, requestAt int64, presents []*UserPresent) error {
+func (h *Handler) obtainItems(user *User, requestAt int64, presents []*UserPresent) error {
 	var addCoin int64
 	cards := make([]*UserCard, 0, len(presents))
 	itemPresents := make([]*UserPresent, 0, len(presents))
@@ -1308,7 +1308,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 	if user == nil {
 		return errorResponse(c, http.StatusNotFound, err)
 	}
-	if err := h.obtainItems(tx, user, requestAt, presents); err != nil {
+	if err := h.obtainItems(user, requestAt, presents); err != nil {
 		if err == ErrUserNotFound || err == ErrItemNotFound {
 			return errorResponse(c, http.StatusNotFound, err)
 		}
@@ -1523,13 +1523,6 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 		card.AmountPerSec += (card.MaxAmountPerSec - card.BaseAmountPerSec) / (card.MaxLevel - 1)
 	}
 
-	tx, err := h.getUserDB(userID).Beginx()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
-	defer tx.Rollback() //nolint:errcheck
-
 	// cardのlvと経験値の更新、itemの消費
 	userCard.AmountPerSec = card.AmountPerSec
 	userCard.Level = card.Level
@@ -1558,11 +1551,6 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 			CreatedAt: v.CreatedAt,
 			UpdatedAt: requestAt,
 		})
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	return successResponse(c, &AddExpToCardResponse{
