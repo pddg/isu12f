@@ -151,6 +151,7 @@ func connectDBs() ([]*sqlx.DB, error) {
 		if err != nil {
 			return nil, err
 		}
+		db.SetMaxIdleConns(32)
 		for {
 			if err := db.Ping(); err == nil {
 				break
