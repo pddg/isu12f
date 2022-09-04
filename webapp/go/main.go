@@ -358,15 +358,7 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, user *User, requestAt int64) ([]
 	for _, lb := range loginBonuses {
 		loginBonusIDs = append(loginBonusIDs, lb.ID)
 	}
-	query, params, err := sqlx.In("SELECT * FROM user_login_bonuses WHERE user_id=? AND login_bonus_id IN (?)", user.ID, loginBonusIDs)
-	if err != nil {
-		return nil, err
-	}
-	// 継続中のログインボーナス
-	var progressingLoginBonuses []*UserLoginBonus
-	if err := tx.Select(&progressingLoginBonuses, query, params...); err != nil {
-		return nil, err
-	}
+	progressingLoginBonuses := batchGetUserLoginBonus(user.ID, loginBonusIDs)
 
 	// まだ受け取り始めて無いログインボーナスを用意する
 	userLoginBonusMap := make(map[int64]*UserLoginBonus, len(loginBonuses))
@@ -439,10 +431,7 @@ func (h *Handler) obtainLoginBonus(tx *sqlx.Tx, user *User, requestAt int64) ([]
 	}
 
 	if len(sendLoginBonuses) > 0 {
-		query = "INSERT INTO user_login_bonuses (id, user_id, login_bonus_id, last_reward_sequence, loop_count, created_at, updated_at, deleted_at) VALUES (:id, :user_id, :login_bonus_id, :last_reward_sequence, :loop_count, :created_at, :updated_at, :deleted_at) ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), login_bonus_id=VALUES(login_bonus_id), last_reward_sequence=VALUES(last_reward_sequence), loop_count=VALUES(loop_count), created_at=VALUES(created_at), updated_at=VALUES(updated_at), deleted_at=VALUES(deleted_at)"
-		if _, err := tx.NamedExec(query, sendLoginBonuses); err != nil {
-			return nil, err
-		}
+		updateUserLoginBonuses(user.ID, sendLoginBonuses)
 	}
 
 	return sendLoginBonuses, nil
@@ -2201,6 +2190,9 @@ var (
 	userDecks   map[int64][]*UserDeck
 	muUserDecks sync.RWMutex
 
+	userLoginBonuses   map[int64][]*UserLoginBonus
+	muUserLoginBonuses sync.RWMutex
+
 	bansByUserID map[int64]struct{}
 	muBans       sync.RWMutex
 
@@ -2273,6 +2265,20 @@ func resetCache(db *sqlx.DB) error {
 			userDecks[d.UserID] = make([]*UserDeck, 0, 4)
 		}
 		userDecks[d.UserID] = append(userDecks[d.UserID], d)
+	}
+
+	muUserLoginBonuses.Lock()
+	defer muUserLoginBonuses.Unlock()
+	userLoginBonuses = make(map[int64][]*UserLoginBonus, 10000)
+	var allUserLoginBonuses []*UserLoginBonus
+	if err := db.Select(&allUserLoginBonuses, "SELECT * FROM user_login_bonuses"); err != nil {
+		return err
+	}
+	for _, lb := range allUserLoginBonuses {
+		if cap(userLoginBonuses[lb.UserID]) == 0 {
+			userLoginBonuses[lb.UserID] = make([]*UserLoginBonus, 0, 6)
+		}
+		userLoginBonuses[lb.UserID] = append(userLoginBonuses[lb.UserID], lb)
 	}
 
 	muBans.Lock()
@@ -2462,6 +2468,42 @@ func cacheNewUserDeck(deck *UserDeck) {
 		userDecks[deck.UserID] = make([]*UserDeck, 0, 4)
 	}
 	userDecks[deck.UserID] = append(userDecks[deck.UserID], deck)
+}
+
+func getAllUserLoginBonusByUser(userID int64) []*UserLoginBonus {
+	muUserLoginBonuses.RLock()
+	defer muUserLoginBonuses.RUnlock()
+	return userLoginBonuses[userID]
+}
+
+func batchGetUserLoginBonus(userID int64, bonusIDs []int64) []*UserLoginBonus {
+	muUserLoginBonuses.RLock()
+	defer muUserLoginBonuses.RUnlock()
+	var ret []*UserLoginBonus
+	for _, ub := range userLoginBonuses[userID] {
+		for _, bonusID := range bonusIDs {
+			if ub.LoginBonusID == bonusID {
+				ret = append(ret, ub)
+			}
+		}
+	}
+	return ret
+}
+
+func updateUserLoginBonuses(userID int64, bonuses []*UserLoginBonus) {
+	muUserLoginBonuses.Lock()
+	defer muUserLoginBonuses.Unlock()
+	bonusMap := make(map[int64]*UserLoginBonus, len(bonuses)+len(userLoginBonuses[userID]))
+	for _, ub := range userLoginBonuses[userID] {
+		bonusMap[ub.LoginBonusID] = ub
+	}
+	for _, ub := range bonuses {
+		bonusMap[ub.LoginBonusID] = ub
+	}
+	userLoginBonuses[userID] = make([]*UserLoginBonus, 0, len(bonusMap))
+	for _, ub := range bonusMap {
+		userLoginBonuses[userID] = append(userLoginBonuses[userID], ub)
+	}
 }
 
 func isBannedUser(userID int64) bool {
