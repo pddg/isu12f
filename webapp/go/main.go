@@ -67,10 +67,6 @@ func (h *Handler) getUserDB(userID int64) *sqlx.DB {
 	return h.dbs[userID%nShards]
 }
 
-func (h *Handler) getAdminDB() *sqlx.DB {
-	return h.dbs[0]
-}
-
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	time.Local = time.FixedZone("Local", 9*60*60)
@@ -2141,6 +2137,9 @@ var (
 	userGachaOneTimeTokens map[int64]*UserOneTimeToken
 	userCardOneTimeTokens  map[int64]*UserOneTimeToken
 	muOneTimeToken         sync.RWMutex
+
+	adminUsers   map[int64]*AdminUser
+	muAdminUsers sync.RWMutex
 )
 
 func resetCache(db *sqlx.DB) error {
@@ -2330,6 +2329,17 @@ func resetCache(db *sqlx.DB) error {
 		} else {
 			userCardOneTimeTokens[ot.UserID] = ot
 		}
+	}
+
+	muAdminUsers.Lock()
+	defer muAdminUsers.Unlock()
+	adminUsers = make(map[int64]*AdminUser, 100)
+	var allAdminUsers []*AdminUser
+	if err := db.Select(&allAdminUsers, "SELECT * FROM admin_users"); err != nil {
+		return err
+	}
+	for _, u := range allAdminUsers {
+		adminUsers[u.ID] = u
 	}
 
 	return nil
@@ -2855,4 +2865,17 @@ func deleteUserOneTimeToken(userID int64, tokenType int) {
 	} else {
 		delete(userCardOneTimeTokens, userID)
 	}
+}
+
+func getAdminUser(userID int64) *AdminUser {
+	muAdminUsers.RLock()
+	defer muAdminUsers.RUnlock()
+	return adminUsers[userID]
+}
+
+func updateAdminUser(userID int64, lastActivatedAt, updatedAt int64) {
+	muAdminUsers.Lock()
+	defer muAdminUsers.Unlock()
+	adminUsers[userID].LastActivatedAt = lastActivatedAt
+	adminUsers[userID].UpdatedAt = updatedAt
 }

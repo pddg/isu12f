@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/csv"
 	"errors"
 	"io"
@@ -59,20 +58,10 @@ func (h *Handler) adminLogin(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
 	}
 
-	tx, err := h.getAdminDB().Beginx()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
 	// userの存在確認
-	query := "SELECT * FROM admin_users WHERE id=?"
-	user := new(AdminUser)
-	if err = tx.Get(user, query, req.UserID); err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
+	user := getAdminUser(req.UserID)
+	if user == nil {
+		return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
 	}
 
 	// verify password
@@ -80,10 +69,7 @@ func (h *Handler) adminLogin(c echo.Context) error {
 		return errorResponse(c, http.StatusUnauthorized, err)
 	}
 
-	query = "UPDATE admin_users SET last_activated_at=?, updated_at=? WHERE id=?"
-	if _, err = tx.Exec(query, requestAt, requestAt, req.UserID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	updateAdminUser(req.UserID, requestAt, requestAt)
 
 	// create session
 	sID, err := h.generateID()
@@ -104,11 +90,6 @@ func (h *Handler) adminLogin(c echo.Context) error {
 	}
 
 	updateAdminSession(sess)
-
-	err = tx.Commit()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
 
 	return successResponse(c, &AdminLoginResponse{
 		AdminSession: sess,
