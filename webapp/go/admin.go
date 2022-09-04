@@ -665,11 +665,7 @@ func (h *Handler) adminUser(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	query = "SELECT * FROM user_devices WHERE user_id=?"
-	devices := make([]*UserDevice, 0)
-	if err = h.getUserDB(userID).Select(&devices, query, userID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	devices := getAllUserDeviceByUser(userID)
 
 	query = "SELECT * FROM user_cards WHERE user_id=?"
 	cards := make([]*UserCard, 0)

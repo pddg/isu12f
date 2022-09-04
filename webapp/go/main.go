@@ -284,15 +284,10 @@ func (h *Handler) checkOneTimeToken(userID int64, token string, tokenType int, r
 
 // checkViewerID
 func (h *Handler) checkViewerID(userID int64, viewerID string) error {
-	query := "SELECT * FROM user_devices WHERE user_id=? AND platform_id=?"
-	device := new(UserDevice)
-	if err := h.getUserDB(userID).Get(device, query, userID, viewerID); err != nil {
-		if err == sql.ErrNoRows {
-			return ErrUserDeviceNotFound
-		}
-		return err
+	device := getUserDevice(userID, viewerID)
+	if device == nil {
+		return ErrUserDeviceNotFound
 	}
-
 	return nil
 }
 
@@ -879,11 +874,7 @@ func (h *Handler) createUser(c echo.Context) error {
 		CreatedAt:    requestAt,
 		UpdatedAt:    requestAt,
 	}
-	query = "INSERT INTO user_devices(id, user_id, platform_id, platform_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
-	_, err = tx.Exec(query, userDevice.ID, user.ID, req.ViewerID, req.PlatformType, requestAt, requestAt)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	cacheUserDevice(userDevice)
 
 	// 初期デッキ付与
 	initCard := new(ItemMaster)
@@ -2383,6 +2374,9 @@ var (
 	sessionCacheBySessionID map[string]*Session
 	muSessionCache          sync.RWMutex
 
+	userDevices   map[int64]map[string]*UserDevice
+	muUserDevices sync.RWMutex
+
 	bansByUserID map[int64]struct{}
 	muBans       sync.RWMutex
 
@@ -2417,6 +2411,20 @@ func resetCache(db *sqlx.DB) error {
 	defer muSessionCache.Unlock()
 	sessionIDCacheByUserID = make(map[int64]string, 10000)
 	sessionCacheBySessionID = make(map[string]*Session, 10000)
+
+	muUserDevices.Lock()
+	defer muUserDevices.Unlock()
+	userDevices = make(map[int64]map[string]*UserDevice, 10000)
+	var allUserDevices []*UserDevice
+	if err := db.Select(&allUserDevices, "SELECT * FROM user_devices"); err != nil {
+		return err
+	}
+	for _, ud := range allUserDevices {
+		if _, ok := userDevices[ud.UserID]; !ok {
+			userDevices[ud.UserID] = make(map[string]*UserDevice, 4)
+		}
+		userDevices[ud.UserID][ud.PlatformID] = ud
+	}
 
 	muBans.Lock()
 	defer muBans.Unlock()
@@ -2532,6 +2540,34 @@ func clearUserSession(sess *Session) {
 	defer muSessionCache.Unlock()
 	delete(sessionIDCacheByUserID, sess.UserID)
 	delete(sessionCacheBySessionID, sess.SessionID)
+}
+
+func getUserDevice(userID int64, platformID string) *UserDevice {
+	muUserDevices.RLock()
+	defer muUserDevices.RUnlock()
+	if userDevices[userID] == nil {
+		return nil
+	}
+	return userDevices[userID][platformID]
+}
+
+func getAllUserDeviceByUser(userID int64) []*UserDevice {
+	muUserDevices.RLock()
+	defer muUserDevices.RUnlock()
+	var ret []*UserDevice
+	for _, ud := range userDevices[userID] {
+		ret = append(ret, ud)
+	}
+	return ret
+}
+
+func cacheUserDevice(device *UserDevice) {
+	muUserDevices.Lock()
+	defer muUserDevices.Unlock()
+	if userDevices[device.UserID] == nil {
+		userDevices[device.UserID] = make(map[string]*UserDevice, 4)
+	}
+	userDevices[device.UserID][device.PlatformID] = device
 }
 
 func isBannedUser(userID int64) bool {
