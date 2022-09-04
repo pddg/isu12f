@@ -924,10 +924,7 @@ func (h *Handler) createUser(c echo.Context) error {
 		CreatedAt: requestAt,
 		UpdatedAt: requestAt,
 	}
-	query = "INSERT INTO user_decks(id, user_id, user_card_id_1, user_card_id_2, user_card_id_3, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-	if _, err := tx.Exec(query, initDeck.ID, initDeck.UserID, initDeck.CardID1, initDeck.CardID2, initDeck.CardID3, initDeck.CreatedAt, initDeck.UpdatedAt); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	cacheNewUserDeck(initDeck)
 
 	// ログイン処理
 	user, loginBonuses, presents, err := h.loginProcess(tx, user.ID, requestAt)
@@ -1875,11 +1872,6 @@ func (h *Handler) updateDeck(c echo.Context) error {
 	defer tx.Rollback() //nolint:errcheck
 
 	// update data
-	query = "UPDATE user_decks SET updated_at=?, deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
-	if _, err = tx.Exec(query, requestAt, requestAt, userID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
 	udID, err := h.generateID()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -1893,10 +1885,7 @@ func (h *Handler) updateDeck(c echo.Context) error {
 		CreatedAt: requestAt,
 		UpdatedAt: requestAt,
 	}
-	query = "INSERT INTO user_decks(id, user_id, user_card_id_1, user_card_id_2, user_card_id_3, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-	if _, err := tx.Exec(query, newDeck.ID, newDeck.UserID, newDeck.CardID1, newDeck.CardID2, newDeck.CardID3, newDeck.CreatedAt, newDeck.UpdatedAt); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	cacheNewUserDeck(newDeck)
 
 	err = tx.Commit()
 	if err != nil {
@@ -1955,13 +1944,9 @@ func (h *Handler) reward(c echo.Context) error {
 	}
 
 	// 使っているデッキの取得
-	deck := new(UserDeck)
-	query = "SELECT * FROM user_decks WHERE user_id=? AND deleted_at IS NULL"
-	if err = h.getUserDB(userID).Get(deck, query, userID); err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusNotFound, err)
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
+	deck := getUserActiveDeck(userID)
+	if deck == nil {
+		return errorResponse(c, http.StatusNotFound, err)
 	}
 
 	cards := make([]*UserCard, 0)
@@ -2013,14 +1998,7 @@ func (h *Handler) home(c echo.Context) error {
 	}
 
 	// 装備情報
-	deck := new(UserDeck)
-	query := "SELECT * FROM user_decks WHERE user_id=? AND deleted_at IS NULL"
-	if err = h.getUserDB(userID).Get(deck, query, userID); err != nil {
-		if err != sql.ErrNoRows {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
-		deck = nil
-	}
+	deck := getUserActiveDeck(userID)
 
 	// 生産性
 	cards := make([]*UserCard, 0)
@@ -2041,7 +2019,7 @@ func (h *Handler) home(c echo.Context) error {
 
 	// 経過時間
 	user := new(User)
-	query = "SELECT * FROM users WHERE id=?"
+	query := "SELECT * FROM users WHERE id=?"
 	if err = h.getUserDB(userID).Get(user, query, userID); err != nil {
 		if err == sql.ErrNoRows {
 			return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
@@ -2377,6 +2355,9 @@ var (
 	userDevices   map[int64]map[string]*UserDevice
 	muUserDevices sync.RWMutex
 
+	userDecks   map[int64][]*UserDeck
+	muUserDecks sync.RWMutex
+
 	bansByUserID map[int64]struct{}
 	muBans       sync.RWMutex
 
@@ -2424,6 +2405,20 @@ func resetCache(db *sqlx.DB) error {
 			userDevices[ud.UserID] = make(map[string]*UserDevice, 4)
 		}
 		userDevices[ud.UserID][ud.PlatformID] = ud
+	}
+
+	muUserDecks.Lock()
+	defer muUserDecks.Unlock()
+	userDecks = make(map[int64][]*UserDeck, 10000)
+	var allUserDecks []*UserDeck
+	if err := db.Select(&allUserDecks, "SELECT * FROM user_decks"); err != nil {
+		return err
+	}
+	for _, d := range allUserDecks {
+		if cap(userDecks[d.UserID]) == 0 {
+			userDecks[d.UserID] = make([]*UserDeck, 0, 4)
+		}
+		userDecks[d.UserID] = append(userDecks[d.UserID], d)
 	}
 
 	muBans.Lock()
@@ -2568,6 +2563,39 @@ func cacheUserDevice(device *UserDevice) {
 		userDevices[device.UserID] = make(map[string]*UserDevice, 4)
 	}
 	userDevices[device.UserID][device.PlatformID] = device
+}
+
+func getAllUserDeckByUser(userID int64) []*UserDeck {
+	muUserDecks.RLock()
+	defer muUserDecks.RUnlock()
+	return userDecks[userID]
+}
+
+func getUserActiveDeck(userID int64) *UserDeck {
+	muUserDecks.RLock()
+	defer muUserDecks.RUnlock()
+	for _, ud := range userDecks[userID] {
+		if ud.DeletedAt == nil {
+			return ud
+		}
+	}
+	return nil
+}
+
+func cacheNewUserDeck(deck *UserDeck) {
+	muUserDecks.Lock()
+	defer muUserDecks.Unlock()
+	updatedAt := deck.CreatedAt
+	for i := range userDecks[deck.UserID] {
+		if userDecks[deck.UserID][i].DeletedAt == nil {
+			userDecks[deck.UserID][i].UpdatedAt = updatedAt
+			userDecks[deck.UserID][i].DeletedAt = &updatedAt
+		}
+	}
+	if cap(userDecks[deck.UserID]) == 0 {
+		userDecks[deck.UserID] = make([]*UserDeck, 0, 4)
+	}
+	userDecks[deck.UserID] = append(userDecks[deck.UserID], deck)
 }
 
 func isBannedUser(userID int64) bool {

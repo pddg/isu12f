@@ -673,11 +673,7 @@ func (h *Handler) adminUser(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	query = "SELECT * FROM user_decks WHERE user_id=?"
-	decks := make([]*UserDeck, 0)
-	if err = h.getUserDB(userID).Select(&decks, query, userID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	decks := getAllUserDeckByUser(userID)
 
 	query = "SELECT * FROM user_items WHERE user_id=?"
 	items := make([]*UserItem, 0)
