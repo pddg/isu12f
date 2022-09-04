@@ -677,11 +677,7 @@ func (h *Handler) adminUser(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	query = "SELECT * FROM user_login_bonuses WHERE user_id=?"
-	loginBonuses := make([]*UserLoginBonus, 0)
-	if err = h.getUserDB(userID).Select(&loginBonuses, query, userID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	loginBonuses := getAllUserLoginBonusByUser(userID)
 
 	query = "SELECT * FROM user_presents WHERE user_id=?"
 	presents := make([]*UserPresent, 0)
