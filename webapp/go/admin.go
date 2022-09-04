@@ -679,11 +679,7 @@ func (h *Handler) adminUser(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	query = "SELECT * FROM user_present_all_received_history WHERE user_id=?"
-	presentHistory := make([]*UserPresentAllReceivedHistory, 0)
-	if err = h.getUserDB(userID).Select(&presentHistory, query, userID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	presentHistory := getAllUserPresentReceivedHistoriesByUser(userID)
 
 	return successResponse(c, &AdminUserResponse{
 		User:                          user,
