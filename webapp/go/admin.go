@@ -656,18 +656,14 @@ func (h *Handler) adminUser(c echo.Context) error {
 		return errorResponse(c, http.StatusBadRequest, err)
 	}
 
-	query := "SELECT * FROM users WHERE id=?"
-	user := new(User)
-	if err = h.getUserDB(userID).Get(user, query, userID); err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
+	user := getUser(userID)
+	if user == nil {
+		return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
 	}
 
 	devices := getAllUserDeviceByUser(userID)
 
-	query = "SELECT * FROM user_cards WHERE user_id=?"
+	query := "SELECT * FROM user_cards WHERE user_id=?"
 	cards := make([]*UserCard, 0)
 	if err = h.getUserDB(userID).Select(&cards, query, userID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -731,13 +727,9 @@ func (h *Handler) adminBanUser(c echo.Context) error {
 		return errorResponse(c, http.StatusBadRequest, err)
 	}
 
-	query := "SELECT * FROM users WHERE id=?"
-	user := new(User)
-	if err = h.getUserDB(userID).Get(user, query, userID); err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusBadRequest, ErrUserNotFound)
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
+	user := getUser(userID)
+	if user == nil {
+		return errorResponse(c, http.StatusBadRequest, ErrUserNotFound)
 	}
 
 	cacheUserBan(user.ID)
