@@ -264,27 +264,19 @@ func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 
 // checkOneTimeToken
 func (h *Handler) checkOneTimeToken(userID int64, token string, tokenType int, requestAt int64) error {
-	tk := new(UserOneTimeToken)
-	query := "SELECT * FROM user_one_time_tokens WHERE token=? AND token_type=? AND deleted_at IS NULL"
-	if err := h.getUserDB(userID).Get(tk, query, token, tokenType); err != nil {
-		if err == sql.ErrNoRows {
-			return ErrInvalidToken
-		}
-		return err
-	}
-
-	if tk.ExpiredAt < requestAt {
-		query = "UPDATE user_one_time_tokens SET deleted_at=? WHERE token=?"
-		if _, err := h.getUserDB(userID).Exec(query, requestAt, token); err != nil {
-			return err
-		}
+	oneTimeToken := getUserOneTimeToken(userID, tokenType)
+	if oneTimeToken == nil {
 		return ErrInvalidToken
 	}
 
-	// 使ったトークンを失効する
-	query = "UPDATE user_one_time_tokens SET deleted_at=? WHERE token=?"
-	if _, err := h.getUserDB(userID).Exec(query, requestAt, token); err != nil {
-		return err
+	if oneTimeToken.Token != token {
+		return ErrInvalidToken
+	}
+
+	defer deleteUserOneTimeToken(userID, tokenType)
+
+	if oneTimeToken.ExpiredAt < requestAt {
+		return ErrInvalidToken
 	}
 
 	return nil
@@ -1188,11 +1180,8 @@ func (h *Handler) listGacha(c echo.Context) error {
 		})
 	}
 
-	// genearte one time token
-	query := "UPDATE user_one_time_tokens SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
-	if _, err = h.getUserDB(userID).Exec(query, requestAt, userID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	// generate one time token
+	deleteUserOneTimeToken(userID, 1)
 	tID, err := h.generateID()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -1210,10 +1199,7 @@ func (h *Handler) listGacha(c echo.Context) error {
 		UpdatedAt: requestAt,
 		ExpiredAt: requestAt + 600,
 	}
-	query = "INSERT INTO user_one_time_tokens(id, user_id, token, token_type, created_at, updated_at, expired_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-	if _, err = h.getUserDB(userID).Exec(query, token.ID, token.UserID, token.Token, token.TokenType, token.CreatedAt, token.UpdatedAt, token.ExpiredAt); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	cacheUserOneTimeToken(token)
 
 	return successResponse(c, &ListGachaResponse{
 		OneTimeToken: token.Token,
@@ -1596,11 +1582,8 @@ func (h *Handler) listItem(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	// genearte one time token
-	query = "UPDATE user_one_time_tokens SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
-	if _, err = h.getUserDB(userID).Exec(query, requestAt, userID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	// generate one time token
+	deleteUserOneTimeToken(userID, 2)
 	tID, err := h.generateID()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -1618,10 +1601,7 @@ func (h *Handler) listItem(c echo.Context) error {
 		UpdatedAt: requestAt,
 		ExpiredAt: requestAt + 600,
 	}
-	query = "INSERT INTO user_one_time_tokens(id, user_id, token, token_type, created_at, updated_at, expired_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-	if _, err = h.getUserDB(userID).Exec(query, token.ID, token.UserID, token.Token, token.TokenType, token.CreatedAt, token.UpdatedAt, token.ExpiredAt); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	cacheUserOneTimeToken(token)
 
 	return successResponse(c, &ListItemResponse{
 		OneTimeToken: token.Token,
@@ -2426,6 +2406,10 @@ var (
 
 	loginBonusRewardMasters   []*LoginBonusRewardMaster
 	muLoginBonusRewardMasters sync.RWMutex
+
+	userGachaOneTimeTokens map[int64]*UserOneTimeToken
+	userCardOneTimeTokens  map[int64]*UserOneTimeToken
+	muOneTimeToken         sync.RWMutex
 )
 
 func resetCache(db *sqlx.DB) error {
@@ -2500,6 +2484,22 @@ func resetCache(db *sqlx.DB) error {
 		return err
 	}
 	loginBonusRewardMasters = allLoginBonusRewardMasters
+
+	muOneTimeToken.Lock()
+	defer muOneTimeToken.Unlock()
+	var allOneTimeTokens []*UserOneTimeToken
+	if err := db.Select(&allOneTimeTokens, "SELECT * FROM user_one_time_tokens"); err != nil {
+		return err
+	}
+	userGachaOneTimeTokens = make(map[int64]*UserOneTimeToken, 100000)
+	userCardOneTimeTokens = make(map[int64]*UserOneTimeToken, 100000)
+	for _, ot := range allOneTimeTokens {
+		if ot.TokenType == 1 {
+			userGachaOneTimeTokens[ot.UserID] = ot
+		} else {
+			userCardOneTimeTokens[ot.UserID] = ot
+		}
+	}
 
 	return nil
 }
@@ -2698,5 +2698,38 @@ func cacheLoginBonusRewardMasters(masters []*LoginBonusRewardMaster) {
 	loginBonusRewardMasters = make([]*LoginBonusRewardMaster, 0, len(loginBonusRewardMap))
 	for _, lbr := range loginBonusRewardMap {
 		loginBonusRewardMasters = append(loginBonusRewardMasters, lbr)
+	}
+}
+
+func getUserOneTimeToken(userID int64, tokenType int) *UserOneTimeToken {
+	muOneTimeToken.RLock()
+	defer muOneTimeToken.RUnlock()
+
+	if tokenType == 1 {
+		return userGachaOneTimeTokens[userID]
+	}
+
+	return userCardOneTimeTokens[userID]
+}
+
+func cacheUserOneTimeToken(token *UserOneTimeToken) {
+	muOneTimeToken.Lock()
+	defer muOneTimeToken.Unlock()
+
+	if token.TokenType == 1 {
+		userGachaOneTimeTokens[token.UserID] = token
+	} else {
+		userCardOneTimeTokens[token.UserID] = token
+	}
+}
+
+func deleteUserOneTimeToken(userID int64, tokenType int) {
+	muOneTimeToken.Lock()
+	defer muOneTimeToken.Unlock()
+
+	if tokenType == 1 {
+		delete(userGachaOneTimeTokens, userID)
+	} else {
+		delete(userCardOneTimeTokens, userID)
 	}
 }
