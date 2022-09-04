@@ -594,7 +594,7 @@ func (h *Handler) obtainItems(tx *sqlx.Tx, user *User, requestAt int64, presents
 			itemIDs = append(itemIDs, p.ItemID)
 		}
 
-		var havingItems []UserItem
+		var havingItems []*UserItem
 		query, params, err := sqlx.In("SELECT * FROM user_items WHERE user_id=? AND item_id IN (?)", user.ID, itemIDs)
 		if err != nil {
 			return err
@@ -604,7 +604,7 @@ func (h *Handler) obtainItems(tx *sqlx.Tx, user *User, requestAt int64, presents
 		}
 		havingItemMap := make(map[int64]*UserItem, len(havingItems))
 		for _, it := range havingItems {
-			havingItemMap[it.ItemID] = &it
+			havingItemMap[it.ItemID] = it
 		}
 		items := make([]*UserItem, 0, len(itemPresents))
 		for _, p := range itemPresents {
