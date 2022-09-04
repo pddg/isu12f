@@ -48,10 +48,10 @@ const (
 	PresentCountPerPage int = 100
 
 	SQLDirectory string = "../sql/"
-	nShards             = 4
+	nShards             = 3
 )
 
-var dbHosts = []string{"133.152.6.250", "133.152.6.251", "133.152.6.252", "133.152.6.253"}
+var dbHosts = []string{"133.152.6.251", "133.152.6.252", "133.152.6.253"}
 
 type Handler struct {
 	dbs []*sqlx.DB
