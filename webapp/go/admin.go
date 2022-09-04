@@ -651,6 +651,8 @@ func readFormFileToCSV(c echo.Context, name string) ([][]string, error) {
 // adminUser ユーザの詳細画面
 // GET /admin/user/{userID}
 func (h *Handler) adminUser(c echo.Context) error {
+	var query string
+
 	userID, err := getUserID(c)
 	if err != nil {
 		return errorResponse(c, http.StatusBadRequest, err)
@@ -663,11 +665,7 @@ func (h *Handler) adminUser(c echo.Context) error {
 
 	devices := getAllUserDeviceByUser(userID)
 
-	query := "SELECT * FROM user_cards WHERE user_id=?"
-	cards := make([]*UserCard, 0)
-	if err = h.getUserDB(userID).Select(&cards, query, userID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	cards := getAllUserCardsByUser(userID)
 
 	decks := getAllUserDeckByUser(userID)
 
