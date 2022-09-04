@@ -449,14 +449,7 @@ func (h *Handler) obtainPresent(tx *sqlx.Tx, userID int64, requestAt int64) ([]*
 	for _, np := range normalPresents {
 		presentAllIDs = append(presentAllIDs, np.ID)
 	}
-	var receivedHistories []*UserPresentAllReceivedHistory
-	query, args, err := sqlx.In("SELECT * FROM user_present_all_received_history WHERE user_id=? AND present_all_id IN (?)", userID, presentAllIDs)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Select(&receivedHistories, query, args...); err != nil {
-		return nil, err
-	}
+	receivedHistories := batchGetUserPresentReceivedHistories(userID, presentAllIDs)
 	receivedHistoryMap := make(map[int64]*UserPresentAllReceivedHistory, len(receivedHistories))
 	for _, h := range receivedHistories {
 		receivedHistoryMap[h.PresentAllID] = h
@@ -514,10 +507,7 @@ func (h *Handler) obtainPresent(tx *sqlx.Tx, userID int64, requestAt int64) ([]*
 	}
 
 	if len(newHistories) > 0 {
-		queryBulkInsertHistories := "INSERT INTO user_present_all_received_history(id, user_id, present_all_id, received_at, created_at, updated_at) VALUES (:id, :user_id, :present_all_id, :received_at, :created_at, :updated_at)"
-		if _, err := tx.NamedExec(queryBulkInsertHistories, newHistories); err != nil {
-			return nil, err
-		}
+		bulkInsertUserPresentAllReceivedHistories(userID, newHistories)
 	}
 
 	return obtainPresents, nil
@@ -2137,6 +2127,9 @@ var (
 	userLoginBonuses   map[int64][]*UserLoginBonus
 	muUserLoginBonuses sync.RWMutex
 
+	userPresentAllReceivedHistories   map[int64][]*UserPresentAllReceivedHistory
+	muUserPresentAllReceivedHistories sync.RWMutex
+
 	bansByUserID map[int64]struct{}
 	muBans       sync.RWMutex
 
@@ -2251,6 +2244,20 @@ func resetCache(db *sqlx.DB) error {
 			userLoginBonuses[lb.UserID] = make([]*UserLoginBonus, 0, 6)
 		}
 		userLoginBonuses[lb.UserID] = append(userLoginBonuses[lb.UserID], lb)
+	}
+
+	muUserPresentAllReceivedHistories.Lock()
+	defer muUserPresentAllReceivedHistories.Unlock()
+	userPresentAllReceivedHistories = make(map[int64][]*UserPresentAllReceivedHistory, 10000)
+	var allUserPresentAllReceivedHistories []*UserPresentAllReceivedHistory
+	if err := db.Select(&allUserPresentAllReceivedHistories, "SELECT * FROM user_present_all_received_history"); err != nil {
+		return err
+	}
+	for _, h := range allUserPresentAllReceivedHistories {
+		if cap(userPresentAllReceivedHistories[h.UserID]) == 0 {
+			userPresentAllReceivedHistories[h.UserID] = make([]*UserPresentAllReceivedHistory, 0, 60)
+		}
+		userPresentAllReceivedHistories[h.UserID] = append(userPresentAllReceivedHistories[h.UserID], h)
 	}
 
 	muBans.Lock()
@@ -2591,6 +2598,35 @@ func updateUserLoginBonuses(userID int64, bonuses []*UserLoginBonus) {
 	for _, ub := range bonusMap {
 		userLoginBonuses[userID] = append(userLoginBonuses[userID], ub)
 	}
+}
+
+func getAllUserPresentReceivedHistoriesByUser(userID int64) []*UserPresentAllReceivedHistory {
+	muUserPresentAllReceivedHistories.RLock()
+	defer muUserPresentAllReceivedHistories.RUnlock()
+	return userPresentAllReceivedHistories[userID]
+}
+
+func batchGetUserPresentReceivedHistories(userID int64, presentIDs []int64) []*UserPresentAllReceivedHistory {
+	muUserPresentAllReceivedHistories.RLock()
+	defer muUserPresentAllReceivedHistories.RUnlock()
+	ret := make([]*UserPresentAllReceivedHistory, 0, len(presentIDs))
+	for _, up := range userPresentAllReceivedHistories[userID] {
+		for _, presentID := range presentIDs {
+			if up.PresentAllID == presentID {
+				ret = append(ret, up)
+			}
+		}
+	}
+	return ret
+}
+
+func bulkInsertUserPresentAllReceivedHistories(userID int64, histories []*UserPresentAllReceivedHistory) {
+	muUserPresentAllReceivedHistories.Lock()
+	defer muUserPresentAllReceivedHistories.Unlock()
+	if cap(userPresentAllReceivedHistories[userID]) == 0 {
+		userPresentAllReceivedHistories[userID] = make([]*UserPresentAllReceivedHistory, 0, 60)
+	}
+	userPresentAllReceivedHistories[userID] = append(userPresentAllReceivedHistories[userID], histories...)
 }
 
 func isBannedUser(userID int64) bool {
