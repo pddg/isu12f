@@ -67,10 +67,6 @@ func (h *Handler) getUserDB(userID int64) *sqlx.DB {
 	return h.dbs[userID%nShards]
 }
 
-func (h *Handler) getAdminDB() *sqlx.DB {
-	return h.dbs[0]
-}
-
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	time.Local = time.FixedZone("Local", 9*60*60)
@@ -2089,6 +2085,10 @@ var (
 	sessionCacheBySessionID map[string]*Session
 	muSessionCache          sync.RWMutex
 
+	adminSessionIDCacheByUserID  map[int64]string
+	adminSessionCacheBySessionID map[string]*Session
+	muAdminSessionCache          sync.RWMutex
+
 	users   map[int64]*User
 	muUsers sync.RWMutex
 
@@ -2137,6 +2137,9 @@ var (
 	userGachaOneTimeTokens map[int64]*UserOneTimeToken
 	userCardOneTimeTokens  map[int64]*UserOneTimeToken
 	muOneTimeToken         sync.RWMutex
+
+	adminUsers   map[int64]*AdminUser
+	muAdminUsers sync.RWMutex
 )
 
 func resetCache(db *sqlx.DB) error {
@@ -2144,6 +2147,11 @@ func resetCache(db *sqlx.DB) error {
 	defer muSessionCache.Unlock()
 	sessionIDCacheByUserID = make(map[int64]string, 10000)
 	sessionCacheBySessionID = make(map[string]*Session, 10000)
+
+	muAdminSessionCache.Lock()
+	defer muAdminSessionCache.Unlock()
+	adminSessionIDCacheByUserID = make(map[int64]string, 100)
+	adminSessionCacheBySessionID = make(map[string]*Session, 100)
 
 	muUsers.Lock()
 	defer muUsers.Unlock()
@@ -2323,6 +2331,17 @@ func resetCache(db *sqlx.DB) error {
 		}
 	}
 
+	muAdminUsers.Lock()
+	defer muAdminUsers.Unlock()
+	adminUsers = make(map[int64]*AdminUser, 100)
+	var allAdminUsers []*AdminUser
+	if err := db.Select(&allAdminUsers, "SELECT * FROM admin_users"); err != nil {
+		return err
+	}
+	for _, u := range allAdminUsers {
+		adminUsers[u.ID] = u
+	}
+
 	return nil
 }
 
@@ -2354,6 +2373,45 @@ func clearUserSession(sess *Session) {
 	defer muSessionCache.Unlock()
 	delete(sessionIDCacheByUserID, sess.UserID)
 	delete(sessionCacheBySessionID, sess.SessionID)
+}
+
+func getAdminSessionBySessionID(sessID string) (*Session, bool) {
+	muAdminSessionCache.RLock()
+	defer muAdminSessionCache.RUnlock()
+	sess, ok := adminSessionCacheBySessionID[sessID]
+	if !ok {
+		return nil, false
+	}
+	if sess == nil {
+		return nil, false
+	}
+	return sess, true
+}
+
+func updateAdminSession(sess *Session) {
+	muAdminSessionCache.Lock()
+	defer muAdminSessionCache.Unlock()
+	if oldSessionID, ok := adminSessionIDCacheByUserID[sess.UserID]; ok {
+		delete(adminSessionCacheBySessionID, oldSessionID)
+	}
+	adminSessionIDCacheByUserID[sess.UserID] = sess.SessionID
+	adminSessionCacheBySessionID[sess.SessionID] = sess
+}
+
+func clearAdminSession(sess *Session) {
+	muAdminSessionCache.Lock()
+	defer muAdminSessionCache.Unlock()
+	delete(adminSessionIDCacheByUserID, sess.UserID)
+	delete(adminSessionCacheBySessionID, sess.SessionID)
+}
+
+func clearAdminSessionBySessionID(sessionID string) {
+	muAdminSessionCache.Lock()
+	defer muAdminSessionCache.Unlock()
+	if sess, ok := adminSessionCacheBySessionID[sessionID]; ok {
+		delete(adminSessionIDCacheByUserID, sess.UserID)
+	}
+	delete(adminSessionCacheBySessionID, sessionID)
 }
 
 func getUser(userID int64) *User {
@@ -2807,4 +2865,17 @@ func deleteUserOneTimeToken(userID int64, tokenType int) {
 	} else {
 		delete(userCardOneTimeTokens, userID)
 	}
+}
+
+func getAdminUser(userID int64) *AdminUser {
+	muAdminUsers.RLock()
+	defer muAdminUsers.RUnlock()
+	return adminUsers[userID]
+}
+
+func updateAdminUser(userID int64, lastActivatedAt, updatedAt int64) {
+	muAdminUsers.Lock()
+	defer muAdminUsers.Unlock()
+	adminUsers[userID].LastActivatedAt = lastActivatedAt
+	adminUsers[userID].UpdatedAt = updatedAt
 }

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/csv"
 	"errors"
 	"io"
@@ -21,13 +20,9 @@ func (h *Handler) adminSessionCheckMiddleware(next echo.HandlerFunc) echo.Handle
 	return func(c echo.Context) error {
 		sessID := c.Request().Header.Get("x-session")
 
-		adminSession := new(Session)
-		query := "SELECT * FROM admin_sessions WHERE session_id=? AND deleted_at IS NULL"
-		if err := h.getAdminDB().Get(adminSession, query, sessID); err != nil {
-			if err == sql.ErrNoRows {
-				return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
-			}
-			return errorResponse(c, http.StatusInternalServerError, err)
+		adminSession, ok := getAdminSessionBySessionID(sessID)
+		if !ok {
+			return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
 		}
 
 		requestAt, err := getRequestTime(c)
@@ -36,10 +31,7 @@ func (h *Handler) adminSessionCheckMiddleware(next echo.HandlerFunc) echo.Handle
 		}
 
 		if adminSession.ExpiredAt < requestAt {
-			query = "UPDATE admin_sessions SET deleted_at=? WHERE session_id=?"
-			if _, err = h.getAdminDB().Exec(query, requestAt, sessID); err != nil {
-				return errorResponse(c, http.StatusInternalServerError, err)
-			}
+			clearAdminSession(adminSession)
 			return errorResponse(c, http.StatusUnauthorized, ErrExpiredSession)
 		}
 
@@ -66,20 +58,10 @@ func (h *Handler) adminLogin(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
 	}
 
-	tx, err := h.getAdminDB().Beginx()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
 	// userの存在確認
-	query := "SELECT * FROM admin_users WHERE id=?"
-	user := new(AdminUser)
-	if err = tx.Get(user, query, req.UserID); err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
+	user := getAdminUser(req.UserID)
+	if user == nil {
+		return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
 	}
 
 	// verify password
@@ -87,16 +69,7 @@ func (h *Handler) adminLogin(c echo.Context) error {
 		return errorResponse(c, http.StatusUnauthorized, err)
 	}
 
-	query = "UPDATE admin_users SET last_activated_at=?, updated_at=? WHERE id=?"
-	if _, err = tx.Exec(query, requestAt, requestAt, req.UserID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
-	// すでにあるsessionをdeleteにする
-	query = "UPDATE admin_sessions SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
-	if _, err = tx.Exec(query, requestAt, req.UserID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	updateAdminUser(req.UserID, requestAt, requestAt)
 
 	// create session
 	sID, err := h.generateID()
@@ -116,15 +89,7 @@ func (h *Handler) adminLogin(c echo.Context) error {
 		ExpiredAt: requestAt + 86400,
 	}
 
-	query = "INSERT INTO admin_sessions(id, user_id, session_id, created_at, updated_at, expired_at) VALUES (?, ?, ?, ?, ?, ?)"
-	if _, err = tx.Exec(query, sess.ID, sess.UserID, sess.SessionID, sess.CreatedAt, sess.UpdatedAt, sess.ExpiredAt); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	updateAdminSession(sess)
 
 	return successResponse(c, &AdminLoginResponse{
 		AdminSession: sess,
@@ -145,15 +110,7 @@ type AdminLoginResponse struct {
 func (h *Handler) adminLogout(c echo.Context) error {
 	sessID := c.Request().Header.Get("x-session")
 
-	requestAt, err := getRequestTime(c)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
-	}
-	// すでにあるsessionをdeleteにする
-	query := "UPDATE admin_sessions SET deleted_at=? WHERE session_id=? AND deleted_at IS NULL"
-	if _, err = h.getAdminDB().Exec(query, requestAt, sessID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	clearAdminSessionBySessionID(sessID)
 
 	return noContentResponse(c, http.StatusNoContent)
 }
